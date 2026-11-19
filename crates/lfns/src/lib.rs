@@ -11,13 +11,14 @@
 //! termination criterion ([`EvidenceEstimate`]), reproducible parallel
 //! proposal evaluation, and checkpointing ([`CheckpointStore`]). A model
 //! enters through [`LikelihoodEstimator`], a proposal scheme through
-//! [`ProposalFitter`].
+//! [`ProposalFitter`]; [`DpgmmProposalFitter`] is the scheme of the paper.
 //!
 //! Reference: Mikelson and Khammash, "Likelihood-free nested sampling for
 //! parameter inference of biochemical reaction networks", `PLoS` Comput Biol
 //! 16(10): e1008264 (2020).
 
 mod checkpoint_store;
+mod dpgmm_proposal;
 mod evidence_accumulator;
 mod evidence_estimate;
 mod iteration_report;
@@ -41,6 +42,7 @@ mod run_state;
 mod shrinkage_moments;
 
 pub use checkpoint_store::CheckpointStore;
+pub use dpgmm_proposal::{DpgmmProposal, DpgmmProposalConfig, DpgmmProposalError, DpgmmProposalFitter};
 pub use evidence_estimate::EvidenceEstimate;
 pub use iteration_report::IterationReport;
 pub use lfns_error::{ComponentFailure, LfnsError};

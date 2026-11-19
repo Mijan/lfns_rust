@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/lfns"]
+members = ["crates/dpgmm", "crates/dpgmm-py", "crates/lfns"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,6 +21,8 @@ pedantic = { level = "warn", priority = -1 }
 unwrap_used = "warn"
 # Field prefixes such as `log_` state the unit of a value and are kept.
 struct_field_names = "allow"
+# Halves of sums such as `(dof + 1) / 2` are formula terms, not midpoints.
+manual_midpoint = "allow"
 
 # Tuned for run time over compile time: whole-program inlining across crates.
 [profile.release]

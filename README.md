@@ -10,17 +10,22 @@ Likelihood-free nested sampling, written in Rust for speed.
     ├── clippy.toml, rustfmt.toml
     ├── Makefile                # quality gates (same commands CI runs)
     ├── crates/
+    │   ├── dpgmm/              # Dirichlet process Gaussian mixture density estimation
     │   └── lfns/               # model-agnostic LF-NS algorithm
-    │       ├── src/
-    │       └── tests/          # integration tests on analytical problems
     ├── notes/                  # paper and supplementary material
     ├── CLAUDE.md               # code style and architecture rules
     └── README.md
 
-The `lfns` crate contains the sampling loop, the evidence estimate with its
-variance and termination criterion, reproducible parallel proposal
-evaluation, and checkpointing. A model plugs in through the
-`LikelihoodEstimator` trait and a proposal scheme through `ProposalFitter`.
+- `dpgmm` fits a Dirichlet process Gaussian mixture to a point set by Gibbs
+  sampling and returns a mixture that can be evaluated and sampled. It does
+  not depend on `lfns` and can be used on its own.
+- `lfns` contains the sampling loop, the evidence estimate with its variance
+  and termination criterion, reproducible parallel proposal evaluation,
+  checkpointing, and the DP-GMM proposal. A model plugs in through the
+  `LikelihoodEstimator` trait.
+
+Each crate keeps its unit tests next to the code and its integration tests,
+which run on problems with known answers, in `tests/`.
 
 ## Getting Started
 

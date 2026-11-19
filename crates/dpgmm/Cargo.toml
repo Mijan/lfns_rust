@@ -1,0 +1,20 @@
+[package]
+name = "dpgmm"
+description = "Dirichlet process Gaussian mixture density estimation by Gibbs sampling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+libm = "0.2.16"
+nalgebra = "0.33.3"
+rand = "0.10"
+rand_distr = "0.6.0"
+thiserror = "2.0.21"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+rand_chacha = "0.10"
