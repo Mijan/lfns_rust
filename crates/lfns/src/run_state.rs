@@ -174,13 +174,19 @@ impl RunState {
         log_threshold
     }
 
-    /// Refills the live set and reports on the finished iteration.
-    pub(crate) fn admit_replacements(&mut self, log_threshold: f64, collection: Collection) -> IterationReport {
+    /// Refills the live set and reports on the finished iteration, whose
+    /// particles had to exceed `log_threshold` and came from a proposal
+    /// with the given rejection quantile.
+    pub(crate) fn admit_replacements(
+        &mut self,
+        (log_threshold, rejection_quantile): (f64, Option<f64>),
+        collection: Collection,
+    ) -> IterationReport {
         self.n_proposals += collection.n_proposals;
         self.live.add_replacements(collection.particles);
         let report = IterationReport::of_iteration(
             self.iteration(),
-            log_threshold,
+            (log_threshold, rejection_quantile),
             self.population.n_replaced(),
             (collection.n_proposals, collection.n_failures),
             self.estimate_evidence(),

@@ -75,6 +75,13 @@ pub(crate) enum ChosenProposal {
 }
 
 impl Proposal for ChosenProposal {
+    fn rejection_quantile(&self) -> Option<f64> {
+        match self {
+            Self::Prior(proposal) => proposal.rejection_quantile(),
+            Self::Dpgmm(proposal) => proposal.rejection_quantile(),
+        }
+    }
+
     fn propose<R: Rng + ?Sized>(&self, rng: &mut R, unit_point: &mut [f64]) {
         match self {
             Self::Prior(proposal) => proposal.propose(rng, unit_point),

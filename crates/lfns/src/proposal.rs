@@ -13,6 +13,11 @@ pub trait Proposal: Sync {
     /// Writes one candidate into `unit_point`; every coordinate must lie in
     /// `[0, 1]`.
     fn propose<R: Rng + ?Sized>(&self, rng: &mut R, unit_point: &mut [f64]);
+
+    /// Fraction of the density the proposal was fitted with that lies
+    /// outside the region it draws from, recorded in the iteration report;
+    /// `None` for a proposal that cuts nothing off.
+    fn rejection_quantile(&self) -> Option<f64>;
 }
 
 /// What the sampler tells a fitter about the run, besides the live

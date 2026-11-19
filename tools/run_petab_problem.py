@@ -6,7 +6,9 @@
 The model is simulated in Rust: as an ODE by default, or stochastically
 with a particle filter (``--dynamics stochastic --n-particles H``). The run
 is checkpointed in the run directory after every iteration; interrupt it at
-any time and continue with the same command plus ``--resume``.
+any time and continue with the same command plus ``--resume``. While it
+runs, ``tools/watch_run.py --run-directory <the same folder>`` prints one
+line per finished iteration, with the best live point.
 
 When the run stops, two files are added to the run directory:
 
@@ -49,6 +51,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, default=None, help="stop after this many iterations")
     parser.add_argument("--n-sweeps", type=int, default=200, help="Gibbs sweeps of each DP-GMM fit")
     parser.add_argument("--rejection-quantile", type=float, default=0.001, help="quantile of the proposal floor")
+    parser.add_argument("--low-acceptance-threshold", type=float, default=0.001,
+                        help="acceptance rate below which the next iteration uses --low-acceptance-quantile; "
+                             "0 switches the rule off")
+    parser.add_argument("--low-acceptance-quantile", type=float, default=0.2,
+                        help="quantile of the proposal floor after a poor acceptance rate")
     return parser.parse_args()
 
 
@@ -96,6 +103,8 @@ def main() -> None:
         max_iterations=args.max_iterations,
         n_sweeps=args.n_sweeps,
         rejection_quantile=args.rejection_quantile,
+        low_acceptance_threshold=args.low_acceptance_threshold or None,
+        low_acceptance_quantile=args.low_acceptance_quantile,
         run_directory=str(args.run_directory),
         resume=args.resume,
         progress=True,

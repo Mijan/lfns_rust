@@ -13,6 +13,10 @@ scored on the channels the fit scored) and writes it as PEtab files:
 ``problem.yaml``, the SBML model with the feed events compiled in, and the
 parameter, observable, condition, and measurement tables.
 
+``--hold NAME ...`` fixes those parameters at the campaign's fitted values
+(``iter1/1_fit/theta.json``) instead of estimating them, as the campaign's
+posterior sampling does for parameters whose fit sits on a bound.
+
 Two options adapt the problem to nested sampling:
 
 - ``--theta <theta.json>`` replaces the nominal values of the parameter table
@@ -36,6 +40,7 @@ from pathlib import Path
 
 SETTINGS_FILE = "fit_settings.json"
 SPLIT_FILE = "holdout_split.json"
+THETA_FILE = Path("iter1") / "1_fit" / "theta.json"
 DEFAULT_DATA = Path("data") / "restricted" / "Cultzyme_ambrdata_v2.csv"
 PROBLEM_FILE = "problem.yaml"
 
@@ -48,6 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data", type=Path, default=None, help="the export; default: the restricted export")
     parser.add_argument("--runs", nargs="+", default=None, metavar="RUN",
                         help="export these runs instead of the campaign's training runs")
+    parser.add_argument("--hold", nargs="+", default=[], metavar="NAME",
+                        help="fix these parameters at the campaign's fitted values")
     parser.add_argument("--theta", type=Path, default=None, metavar="THETA_JSON",
                         help="replace the nominal parameter values by this fit's values")
     parser.add_argument("--free", nargs="+", default=None, metavar="NAME",
@@ -100,6 +107,17 @@ def with_only_free(parameter_table, free: list[str]):
     return table
 
 
+def held_values(campaign: Path, names: list[str]) -> dict[str, float]:
+    """The campaign's fitted values of the parameters to hold."""
+    if not names:
+        return {}
+    fitted = json.loads((campaign / THETA_FILE).read_text())["parameters"]
+    unknown = sorted(set(names) - set(fitted))
+    if unknown:
+        raise SystemExit(f"--hold {unknown} are not parameters the campaign fitted. It fitted: {sorted(fitted)}.")
+    return {name: float(fitted[name]) for name in names}
+
+
 def main() -> None:
     args = parse_args()
     sys.path.insert(0, str(args.playground / "jm"))
@@ -112,7 +130,10 @@ def main() -> None:
     model = ambr.load_model(settings["model"], root=args.campaign / "models")
 
     problem = ambr.build_joint_problem(model, dataset, runs, hold={})
-    PetabProblemScope(problem).observe_only(scored_channels(model, settings["unscored_channels"]))
+    scope = PetabProblemScope(problem).observe_only(scored_channels(model, settings["unscored_channels"]))
+    held = held_values(args.campaign, args.hold)
+    if held:
+        scope.hold_at(held)
 
     if args.theta is not None:
         problem.parameter_df = with_fitted_nominals(problem.parameter_df, args.theta)

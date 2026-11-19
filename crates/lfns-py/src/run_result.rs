@@ -122,6 +122,9 @@ impl PyRunResult {
             "acceptance_rate",
             self.report_column(py, IterationReport::acceptance_rate),
         )?;
+        // NaN marks an iteration whose proposal cut nothing off.
+        let rejection_quantile = |report: &IterationReport| report.rejection_quantile().unwrap_or(f64::NAN);
+        columns.set_item("rejection_quantile", self.report_column(py, rejection_quantile))?;
         columns.set_item("log_evidence", self.report_column(py, |r| r.evidence().log_evidence()))?;
         columns.set_item(
             "log_dead_evidence",

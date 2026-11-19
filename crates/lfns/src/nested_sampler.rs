@@ -127,7 +127,7 @@ impl<L: LikelihoodEstimator, F: ProposalFitter> NestedSampler<L, F> {
         let rule = AcceptanceRule::Above(log_threshold);
         let n_replaced = self.config.population().n_replaced();
         let replacements = self.collect(&proposal, rule, n_replaced, (iteration, state.n_proposals()))?;
-        Ok(state.admit_replacements(log_threshold, replacements))
+        Ok(state.admit_replacements((log_threshold, proposal.rejection_quantile()), replacements))
     }
 
     fn collect<P: Proposal>(

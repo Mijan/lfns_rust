@@ -151,6 +151,7 @@ impl Default for DpgmmProposalConfig {
 pub struct DpgmmProposal {
     latent_mixture: GaussianMixture,
     log_ratio_floor: f64,
+    rejection_quantile: f64,
 }
 
 impl DpgmmProposal {
@@ -177,6 +178,10 @@ impl DpgmmProposal {
 }
 
 impl Proposal for DpgmmProposal {
+    fn rejection_quantile(&self) -> Option<f64> {
+        Some(self.rejection_quantile)
+    }
+
     fn propose<R: Rng + ?Sized>(&self, rng: &mut R, unit_point: &mut [f64]) {
         loop {
             self.latent_mixture.sample(rng, unit_point);
@@ -256,6 +261,7 @@ impl ProposalFitter for DpgmmProposalFitter {
         Ok(DpgmmProposal {
             latent_mixture,
             log_ratio_floor,
+            rejection_quantile,
         })
     }
 }
@@ -291,6 +297,9 @@ mod tests {
         let (first, healthy, poor) = (floor_after(None)?, floor_after(Some(0.4))?, floor_after(Some(0.0002))?);
         assert!((first - healthy).abs() < 1e-12, "{first} vs {healthy}");
         assert!(poor > healthy, "floor {poor} after a poor rate is not above {healthy}");
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let tightened = fitter.fit(&live_points(), FitContext::after(Some(0.0002)), &mut rng)?;
+        assert_eq!(tightened.rejection_quantile(), Some(rule.rejection_quantile()));
         Ok(())
     }
 

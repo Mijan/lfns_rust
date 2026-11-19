@@ -13,6 +13,10 @@ pub struct IterationReport {
     n_accepted: u32,
     n_proposals: u64,
     n_failures: u64,
+    /// Absent in reports written before the field existed, which then read
+    /// as "no quantile".
+    #[serde(default)]
+    rejection_quantile: Option<f64>,
     evidence: EvidenceEstimate,
 }
 
@@ -21,7 +25,7 @@ impl IterationReport {
     /// may call this.
     pub(crate) fn of_iteration(
         iteration: u32,
-        log_threshold: f64,
+        (log_threshold, rejection_quantile): (f64, Option<f64>),
         n_accepted: u32,
         (n_proposals, n_failures): (u64, u64),
         evidence: EvidenceEstimate,
@@ -32,6 +36,7 @@ impl IterationReport {
             n_accepted,
             n_proposals,
             n_failures,
+            rejection_quantile,
             evidence,
         }
     }
@@ -67,6 +72,15 @@ impl IterationReport {
         #[allow(clippy::cast_precision_loss)]
         let n_proposals = self.n_proposals as f64;
         f64::from(self.n_accepted) / n_proposals
+    }
+
+    /// Fraction of the proposal's fitted density that lay outside the
+    /// region new particles were drawn from; `None` for a proposal that
+    /// cuts nothing off, such as the prior. A larger value than the run's
+    /// setting marks an iteration that used a tightened region.
+    #[must_use]
+    pub fn rejection_quantile(&self) -> Option<f64> {
+        self.rejection_quantile
     }
 
     /// Evidence estimate after the iteration.

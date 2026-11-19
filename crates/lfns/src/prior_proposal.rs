@@ -16,6 +16,10 @@ use crate::proposal::{FitContext, Proposal, ProposalFitter};
 pub struct PriorProposal;
 
 impl Proposal for PriorProposal {
+    fn rejection_quantile(&self) -> Option<f64> {
+        None
+    }
+
     fn propose<R: Rng + ?Sized>(&self, rng: &mut R, unit_point: &mut [f64]) {
         for coordinate in unit_point.iter_mut() {
             *coordinate = rng.random::<f64>();
