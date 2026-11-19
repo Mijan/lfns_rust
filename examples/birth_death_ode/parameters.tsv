@@ -1,0 +1,4 @@
+parameterId	parameterName	parameterScale	lowerBound	upperBound	nominalValue	estimate
+k	transcription rate	log10	0.1	10	1	1
+gamma_mRNA	degradation rate	log10	0.01	1	0.1	1
+sigma	standard deviation of the read-out	log10	0.5	20	3	1

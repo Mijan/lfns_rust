@@ -1,0 +1,2 @@
+observableId	observableName	observableFormula	noiseFormula	noiseDistribution
+mRNA_read	mRNA count read-out	mRNA	sigma	normal
