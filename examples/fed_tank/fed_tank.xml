@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Created by libAntimony version v3.3.0 with libSBML version 5.21.2. -->
+<sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
+  <model metaid="fed_tank" id="fed_tank">
+    <listOfCompartments>
+      <compartment id="tank" spatialDimensions="3" size="1" constant="true"/>
+    </listOfCompartments>
+    <listOfSpecies>
+      <species id="S" compartment="tank" initialConcentration="2" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+    </listOfSpecies>
+    <listOfParameters>
+      <parameter id="feed" value="0" constant="false"/>
+      <parameter id="feed_0" value="0" constant="true"/>
+      <parameter id="feed_1" value="0" constant="true"/>
+      <parameter id="feed_2" value="0" constant="true"/>
+      <parameter id="tank_volume" value="2" constant="true"/>
+      <parameter id="tank_volume_floor" value="0.001" constant="true"/>
+      <parameter id="k_use" value="0.3" constant="true"/>
+      <parameter id="S_feed" value="10" constant="true"/>
+      <parameter id="dilution" constant="false"/>
+      <parameter id="consumption" constant="false"/>
+    </listOfParameters>
+    <listOfRules>
+      <rateRule variable="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply>
+            <minus/>
+            <apply>
+              <times/>
+              <ci> dilution </ci>
+              <apply>
+                <minus/>
+                <ci> S_feed </ci>
+                <ci> S </ci>
+              </apply>
+            </apply>
+            <ci> consumption </ci>
+          </apply>
+        </math>
+      </rateRule>
+      <assignmentRule variable="dilution">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply>
+            <divide/>
+            <ci> feed </ci>
+            <apply>
+              <max/>
+              <ci> tank_volume </ci>
+              <ci> tank_volume_floor </ci>
+            </apply>
+          </apply>
+        </math>
+      </assignmentRule>
+      <assignmentRule variable="consumption">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply>
+            <times/>
+            <ci> k_use </ci>
+            <piecewise>
+              <piece>
+                <ci> S </ci>
+                <apply>
+                  <gt/>
+                  <ci> S </ci>
+                  <cn type="integer"> 0 </cn>
+                </apply>
+              </piece>
+              <otherwise>
+                <cn type="integer"> 0 </cn>
+              </otherwise>
+            </piecewise>
+          </apply>
+        </math>
+      </assignmentRule>
+    </listOfRules>
+    <listOfEvents>
+      <event id="first_interval" useValuesFromTriggerTime="true">
+        <trigger initialValue="false" persistent="true">
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply>
+              <geq/>
+              <csymbol encoding="text" definitionURL="http://www.sbml.org/sbml/symbols/time"> time </csymbol>
+              <cn type="integer"> 0 </cn>
+            </apply>
+          </math>
+        </trigger>
+        <listOfEventAssignments>
+          <eventAssignment variable="feed">
+            <math xmlns="http://www.w3.org/1998/Math/MathML">
+              <ci> feed_0 </ci>
+            </math>
+          </eventAssignment>
+        </listOfEventAssignments>
+      </event>
+      <event id="second_interval" useValuesFromTriggerTime="true">
+        <trigger initialValue="false" persistent="true">
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply>
+              <geq/>
+              <csymbol encoding="text" definitionURL="http://www.sbml.org/sbml/symbols/time"> time </csymbol>
+              <cn type="integer"> 4 </cn>
+            </apply>
+          </math>
+        </trigger>
+        <listOfEventAssignments>
+          <eventAssignment variable="feed">
+            <math xmlns="http://www.w3.org/1998/Math/MathML">
+              <ci> feed_1 </ci>
+            </math>
+          </eventAssignment>
+        </listOfEventAssignments>
+      </event>
+      <event id="third_interval" useValuesFromTriggerTime="true">
+        <trigger initialValue="false" persistent="true">
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply>
+              <geq/>
+              <csymbol encoding="text" definitionURL="http://www.sbml.org/sbml/symbols/time"> time </csymbol>
+              <cn type="integer"> 8 </cn>
+            </apply>
+          </math>
+        </trigger>
+        <listOfEventAssignments>
+          <eventAssignment variable="feed">
+            <math xmlns="http://www.w3.org/1998/Math/MathML">
+              <ci> feed_2 </ci>
+            </math>
+          </eventAssignment>
+        </listOfEventAssignments>
+      </event>
+    </listOfEvents>
+  </model>
+</sbml>

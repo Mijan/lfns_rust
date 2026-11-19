@@ -1,0 +1,4 @@
+parameterId	parameterScale	lowerBound	upperBound	nominalValue	estimate
+k_use	log10	0.03	3	0.3	1
+S_feed	lin	2	20	10	1
+sigma_S	lin	0.01	2	0.2	0

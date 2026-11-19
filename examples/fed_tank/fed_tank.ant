@@ -1,0 +1,25 @@
+// A stirred tank fed from a reservoir on a schedule that differs per run.
+// The substrate S is diluted by the feed and used up at a first-order rate.
+// The feed rate is a piecewise-constant input: events set it at fixed times
+// to the interval parameters feed_0, feed_1, feed_2, whose values each run
+// supplies through the PEtab condition table.
+model fed_tank
+  compartment tank = 1;
+  species S in tank;
+  S = 2;
+
+  feed = 0;            // feed rate, set by the events below
+  feed_0 = 0; feed_1 = 0; feed_2 = 0;
+  tank_volume = 2;
+  tank_volume_floor = 0.001;
+  k_use = 0.3;         // first-order use of the substrate
+  S_feed = 10;         // substrate concentration of the feed
+
+  dilution := feed / max(tank_volume, tank_volume_floor);
+  consumption := k_use * piecewise(S, S > 0, 0);
+  S' = dilution * (S_feed - S) - consumption;
+
+  first_interval: at (time >= 0), t0=false: feed = feed_0;
+  second_interval: at (time >= 4), t0=false: feed = feed_1;
+  third_interval: at (time >= 8), t0=false: feed = feed_2;
+end
