@@ -1,25 +1,13 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-
-# Virtual envs
-.venv/
-venv/
+# Rust
+target/
 
 # IDE
 .idea/
 .vscode/
 
-# Tool caches and outputs
-.tox/
-.ruff_cache/
-.mypy_cache/
-.pytest_cache/
-.coverage
-test-results/
+# Profiling output
+perf.data*
+flamegraph.svg
 
 # OS
 .DS_Store

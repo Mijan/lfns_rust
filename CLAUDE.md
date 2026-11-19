@@ -11,120 +11,140 @@
   they are universally understood in the domain (see *Files and Naming* for
   how a domain abbreviation is adopted).
 - Names must be readable at the CALL SITE, not only at the declaration.
-  `self.__iteration_factory.build(...)` narrates itself;
-  `self.__factory.build(...)` forces the reader to click through to learn
-  "factory of what?". Qualify a member's role whenever the bare noun leaves
-  that question open.
+  `self.iteration_factory.build(...)` narrates itself;
+  `self.factory.build(...)` forces the reader to jump to the definition to
+  learn "factory of what?". Qualify a field's role whenever the bare noun
+  leaves that question open.
 - One narrated step per line: when a chained call's intermediate value has a
   meaningful name, split the chain and name it
-  (`iteration = factory.build(...)` then `report = iteration.run()`), so a
-  traceback points at the step that failed. Chains stay fine when the
-  intermediate is nameless (`text.strip().lower()`).
+  (`let iteration = factory.build(...)?;` then
+  `let report = iteration.run()?;`), so an error or backtrace points at the
+  step that failed. Chains stay fine when the intermediate is nameless
+  (`text.trim().to_lowercase()`, iterator adapter pipelines).
 - No magic numbers or string literals. Extract them into named constants or
   config fields.
 - Prefer explicit over implicit. Never rely on side effects for control flow.
 - No commented-out code. Remove dead code; git history preserves it.
+- Follow the Rust API Guidelines for naming: `snake_case` functions and
+  modules, `UpperCamelCase` types, `SCREAMING_SNAKE_CASE` constants,
+  `as_`/`to_`/`into_` conversion prefixes, no `get_` prefix on getters.
 
-### Type Annotations
+### Types
 
-- Type-annotate every function signature, every return type, and every class
-  attribute. No exceptions.
-- Use modern syntax: `list[X]`, `dict[K, V]`, `tuple[X, ...]`, `X | None`
-  (not `List[X]`, `Optional[X]`). Write `torch.Tensor`, not bare `Tensor`.
-- Use `X | None` only when `None` is a semantically meaningful value, not as
-  a default-avoidance pattern.
-- Use `Protocol` or `ABC` for structural/nominal typing of interfaces.
-- Generic classes use `Generic[T]` with meaningful type variables.
+- Use `Option<T>` only when "absent" is a semantically meaningful value, not
+  as a default-avoidance pattern.
+- Wrap domain quantities that share a primitive type in newtypes
+  (`struct Tolerance(f64)`, `struct ParticleCount(usize)`), so the compiler
+  rejects a swapped argument.
+- Never convert numbers with `as` when the cast can truncate, wrap, or lose
+  sign. Use `From`/`TryFrom` and handle the failure.
+- Use traits to define interfaces. Prefer generics or `impl Trait` (static
+  dispatch) over `dyn Trait`; reach for `dyn Trait` only when the set of
+  implementations must be chosen at run time and the call is not on a hot
+  path.
+- Generic parameters and associated types get meaningful names when a single
+  letter does not say enough (`P: Prior`, `type Params`).
 
-### Classes and OOP
+### Structs, Enums, and Traits
 
-- Class members are **private** (`__` prefix) by default, **protected**
-  (`_` prefix) when a subclass needs them, and exposed only through
-  `@property` getters. Provide setters only when mutation is explicitly part
-  of the design. Frozen dataclass fields are the exception: immutability
-  already protects them, so they stay plain public fields.
-- Use `@property` (not methods) for structural attributes that describe what
-  an object IS (e.g., `n_features`, `input_dim`). The `()` on a method call
-  implies an action or non-trivial computation.
-- Use `@dataclass(frozen=True)` for all value objects and configuration.
-  Mutable dataclasses need strong justification.
-- Use `ABC` + `@abstractmethod` to define interfaces. Concrete implementations
-  inherit from these.
-- Use `Generic[T]` on ABCs when subclasses are parameterized by a type (e.g.,
-  a factory generic over its params dataclass). Expose the concrete type via
-  a `@property` returning `type[T]` so callers can construct instances
-  without knowing the concrete subclass.
-- Use inheritance when two classes share behavior that varies in one
-  dimension: a base class holds the shared logic and an abstract method the
-  varying part. Use composition when the relationship is "has-a".
-- Use `enum.Enum` (or `enum.StrEnum`) for categorical choices, never raw
-  strings.
-- Each class has a single responsibility. If it does two unrelated things,
+- Struct fields are **private** by default, `pub(crate)` or `pub(super)`
+  only when a sibling module genuinely needs them, and exposed outside the
+  module only through getter methods. Provide `&mut self` setters only when
+  mutation is explicitly part of the design. Plain-data structs with no
+  invariants are the exception: they may have `pub` fields.
+- Getters describe what an object IS and are named as nouns
+  (`n_features()`, `input_dim()`); they are cheap and take `&self`. Methods
+  that perform an action or non-trivial computation are named as verbs.
+- Value objects and configuration are immutable: no `&mut self` methods, no
+  interior mutability. Mutable state needs strong justification.
+- Use a trait when the set of implementations is open, an `enum` when it is
+  closed. Never use raw strings or integers for categorical choices.
+- Use associated types on a trait when implementors are parameterized by a
+  type (e.g. a factory trait with `type Params`), so callers can name and
+  construct the concrete type without knowing the implementor.
+- Rust has no inheritance. When two types share behavior that varies in one
+  dimension, put the shared logic in provided (default) trait methods and
+  the varying part in a required method, or make one struct generic over a
+  strategy trait. Use composition when the relationship is "has-a".
+- Each type has a single responsibility. If it does two unrelated things,
   split it.
-- Implement `__repr__` on all public-facing classes (automatic for
-  dataclasses).
+- Derive `Debug` on every public type. Derive `Clone`, `PartialEq`, and
+  `Copy` only where the semantics are meaningful for the domain object.
 
 ### Functions
 
 - Functions do one thing. If the name contains "and", it probably does two.
-- Separate commands from queries, and let the VERB disclose the effect. A
-  computational verb (`estimate_`, `compare_`, `assemble_`, `derive_`) means
-  no effect beyond the return value; a method that persists or mutates says
-  so (`record_`, `write_`, `save_`, `submit_`, `add_`, `narrow_to`). Never
-  use the functional `with_*` prefix (returns a modified COPY) for an
-  in-place mutation; a caller who kept the original gets silent corruption.
+- Separate commands from queries, and let the signature and the VERB
+  disclose the effect. A query takes `&self` and uses a computational verb
+  (`estimate_`, `compare_`, `assemble_`, `derive_`); a method that persists
+  or mutates takes `&mut self` (or does I/O) and says so (`record_`,
+  `write_`, `save_`, `submit_`, `add_`, `narrow_to`). `with_*` is reserved
+  for methods that consume or copy `self` and return the modified value;
+  never use it for an in-place mutation.
+- Never hide mutation behind `&self` with interior mutability (`Cell`,
+  `RefCell`, `Mutex`) unless it is a cache whose effect is unobservable.
 - Prefer pure functions (no side effects, deterministic) wherever possible.
   "Pure" is about effects, not placement: see *No free-floating functions*
   for where logic lives.
 - Limit function arguments to 5 or fewer. If more are needed, group them into
-  a config or dataclass.
-- Use keyword-only arguments (after `*`) for any argument that is not
-  self-evident from position.
+  a config or params struct.
+- Rust has no keyword arguments. When an argument is not self-evident from
+  position, or two arguments share a type, pass newtypes or a params struct
+  with named fields instead of bare positional primitives. Never pass a
+  bare `bool` flag; use a two-variant enum.
 
 ### Error Handling
 
-- Raise specific exceptions with informative messages. Never use bare
-  `except:` or `except Exception:` without re-raising.
+- Recoverable failures return `Result<T, E>` with a specific error type
+  carrying an informative message. Define domain error enums (derive
+  `std::error::Error`, e.g. with `thiserror`); do not return
+  `Box<dyn Error>` or `String` from library code.
+- Panics are for bugs only. No `unwrap()` in library code. `expect("...")`
+  is allowed only when the invariant is provable at that line, and the
+  message states the invariant.
+- Never discard an error: no `let _ = fallible();`, no `.ok()` to silence a
+  `Result`, no `unwrap_or_default()` to paper over a failure. Propagate with
+  `?` or handle it explicitly.
 - Validate inputs at public API boundaries. Internal functions can trust
-  their callers.
-- Use custom exception classes for domain-specific errors (inherit from the
-  appropriate built-in).
+  their callers; use `debug_assert!` to document what they rely on.
 - Every validation message tells the caller how to fix the problem; see
   *Validation errors must contain the remediation*.
 
-### Package Structure
+### Crate and Module Structure
 
-- Organize code into clearly separated packages and sub-packages. Each
-  package represents a coherent domain concept.
-- Every package has an `__init__.py` that explicitly exports its public API
-  via `__all__`.
-- Avoid circular imports. If two modules need each other, extract the shared
+- Organize code into clearly separated modules and sub-modules. Each module
+  represents a coherent domain concept.
+- Items are private by default. A parent module explicitly exports its
+  public API with `pub use` re-exports; `lib.rs` re-exports the crate's
+  public API. Do not make a module `pub` just to reach one item in it.
+- The compiler allows cyclic `use` between modules of one crate; this
+  project does not. If two modules need each other, extract the shared
   abstraction into a third module.
-- Keep module files focused. A module with more than ~300 lines likely needs
-  splitting.
+- Keep module files focused. A module with more than ~300 lines (excluding
+  its unit tests) likely needs splitting.
 
 ### Files and Naming
 
-- One module per substantial class, named after it: `IterationFactory` lives
-  in `iteration_factory.py` and is tested in `test_iteration_factory.py`.
-  Small definitions that exist only in service of that class (its params
-  dataclass, a local enum, a domain exception, a private helper) live in the
-  same module.
-- Module basenames are unique across the whole package, so editor tabs,
-  tracebacks, and grep are unambiguous. Do not rely on the package path to
-  disambiguate: `heart_rate/features.py` beside `breathing_rate/features.py`
-  is two files called `features.py`.
+- One module per substantial type, named after it: `IterationFactory` lives
+  in `iteration_factory.rs`, with its unit tests in a `#[cfg(test)] mod
+  tests` at the bottom of the same file. Small definitions that exist only
+  in service of that type (its params struct, a local enum, its error type,
+  a private helper) live in the same module.
+- Module basenames are unique across the whole crate, so editor tabs,
+  backtraces, and grep are unambiguous. Never use `mod.rs`: a module `foo`
+  with children is `foo.rs` plus the directory `foo/`. (The one exception
+  is `tests/common/mod.rs`, which Cargo requires for shared test helpers.)
 - When repeating the domain word makes names long
-  (`heart_rate/heart_rate_features.py`), shorten it with an abbreviation
+  (`heart_rate/heart_rate_features.rs`), shorten it with an abbreviation
   that is standard in the domain and use that abbreviation consistently in
-  package, module, and class: `hr/hr_features.py` holds `HrFeatures`,
-  `br/br_features.py` holds `BrFeatures`. Expand the abbreviation once in
-  the package's `__init__.py` docstring. An abbreviation adopted this way is
+  module and type: `hr/hr_features.rs` holds `HrFeatures`,
+  `br/br_features.rs` holds `BrFeatures`. Expand the abbreviation once in
+  the parent module's `//!` doc comment. An abbreviation adopted this way is
   the "universally understood in the domain" exception to the no-abbreviation
   rule; it is never introduced ad hoc in a single identifier.
-- Falling back to the package path (`heart_rate/features.py`) is acceptable
+- Falling back to the module path (`heart_rate/features.rs`) is acceptable
   only when no standard abbreviation exists. Never mix both styles within one
-  package.
+  parent module.
 
 ---
 
@@ -133,58 +153,60 @@
 These are hard requirements, not style preferences. They prevent the design
 drift that creates bugs and technical debt.
 
-### A. Class shape and content
+### A. Type shape and content
 
-#### Classes must mirror the domain, not the implementation
+#### Types must mirror the domain, not the implementation
 
 Ask: "what is this thing mathematically / conceptually?" The fields and
 methods match that answer, nothing more. If a mathematical object is defined
-by X and Y, the class contains X and Y. Do not add Z because some algorithm
+by X and Y, the struct contains X and Y. Do not add Z because some algorithm
 that consumes the object needs Z; that algorithm derives Z from X and Y, or
 Z lives on the algorithm's side.
 
-#### Design classes so misuse is structurally impossible
+#### Design types so misuse is structurally impossible
 
-The test of a class design: how hard is it to construct or use one WRONGLY,
+The test of a type design: how hard is it to construct or use one WRONGLY,
 with inconsistent fields, out of context, or bypassing the invariants its
 consumers rely on? Prefer designs where the illegal state cannot be expressed
-at all over designs where it is merely documented away.
+at all (an enum instead of two booleans, a newtype instead of a bare `f64`,
+a non-empty collection type instead of a length check) over designs where it
+is merely documented away.
 
-Two kinds of data-bearing classes get different constructor policies:
+Two kinds of data-bearing types get different constructor policies:
 
 - A **value object**'s meaning is entirely in its fields: any combination
-  that passes validation is legitimate, whoever built it. These are
-  `@dataclass(frozen=True)` with an OPEN constructor plus a `__post_init__`
-  that enforces every internal invariant (shape agreement, ranges,
-  cross-field consistency).
+  that passes validation is legitimate, whoever built it. These have private
+  fields and a PUBLIC validating constructor
+  (`new(...) -> Result<Self, Error>`) that enforces every internal invariant
+  (length agreement, ranges, cross-field consistency).
 - A **result object** additionally CLAIMS provenance ("this is what the
-  fit/parser/resolver produced") and its fields can be individually valid
-  yet jointly a lie. Close the front door: construction goes through the
-  producer or a named factory (`between(...)`, `of_result(...)`,
-  `parse(...)`); fields are keyword-only; and where the blast radius
-  warrants it, use a plain class with protected members behind read-only
-  properties, so no open constructor exists at all.
+  sampler/parser/resolver produced") and its fields can be individually
+  valid yet jointly a lie. Close the front door: fields are private, the
+  constructor is private or `pub(super)` to the producer's module, and
+  outside code can only obtain one from the producer or a named constructor
+  (`between(...)`, `of_result(...)`, `parse(...)`).
 
 Rules that follow:
 
-- **Invariants live on the TYPE, never only in the factory.** A check
-  performed in `from_x()` but not in `__init__`/`__post_init__` is a check
-  every direct construction silently skips. Factories DERIVE; the type
-  ENFORCES.
-- If a docstring needs to say "construct directly only in tests", the
-  constructor wants to be closed: either enforce the invariants in
-  `__post_init__` so direct construction is safe, or remove the open
-  constructor.
-- Make fields keyword-only (`kw_only=True`) whenever two fields share a
-  type; positionally swapped same-type arguments are exactly the silent
-  misuse this section prevents.
-- Do not reach for producer-only construction by default: it costs the
-  generated `__eq__`/`__repr__`, `dataclasses.replace`, and cheap test
-  fixtures. Reserve it for objects whose claim cannot be validated from
-  their own fields and whose misconstruction would flow into artifacts or
-  decisions undetected. Where such a class must still evolve (a resumed fit
-  extending its history), give it a NAMED evolution method rather than
-  leaving `replace` as the mutation surface.
+- **Invariants live on the TYPE, never only in one constructor.** Every way
+  of creating a value funnels through the same validation: named
+  constructors call `new`; `Deserialize` goes through
+  `#[serde(try_from = "...")]`; `Default` is derived only if the default
+  value satisfies the invariants. Constructors DERIVE; the type ENFORCES.
+- A struct with invariants never has `pub` fields: a struct literal or a
+  field assignment would skip the validation.
+- If a doc comment needs to say "construct directly only in tests", the
+  constructor wants to be closed: either enforce the invariants so direct
+  construction is safe, or restrict its visibility.
+- A constructor never takes two positional arguments of the same type;
+  positionally swapped same-type arguments are exactly the silent misuse
+  this section prevents. Use newtypes or a params struct with named fields.
+- Do not reach for producer-only construction by default: it costs cheap
+  test fixtures and struct-update syntax. Reserve it for objects whose claim
+  cannot be validated from their own fields and whose misconstruction would
+  flow into artifacts or decisions undetected. Where such a type must still
+  evolve (a resumed run extending its history), give it a NAMED evolution
+  method rather than exposing its fields.
 
 #### Distinguish structural properties from behavioral properties
 
@@ -194,20 +216,22 @@ derived properties with defining ones.
 
 - If two properties seem related but can diverge in edge cases, they are
   separate concepts and are stored or computed independently.
-- Properties computable from defining properties are derived `@property`
-  methods, not redundant stored fields. If computation is expensive, cache.
+- Properties computable from defining properties are getter methods, not
+  redundant stored fields. If computation is expensive, cache it
+  (`std::cell::OnceCell` / `std::sync::OnceLock`).
 
 #### Separate defining parameters from runtime inputs
 
 The values that define what an object IS are distinguished from the inputs
 it receives at execution time.
 
-- A neural network is defined by its architecture and weights. The input
-  tensor is an argument to `forward()`, not a constructor parameter.
-- A domain model is defined by its structure and parameters. Runtime inputs
-  (initial states, time spans, solver settings) are passed at the call site,
-  not stored in the same config or params object.
-- A factory's params dataclass contains only defining parameters.
+- A stochastic model is defined by its structure and parameters. Runtime
+  inputs (initial states, time spans, solver settings, the random number
+  generator) are passed at the call site, not stored in the same config or
+  params struct.
+- A sampler is defined by its configuration. The data it is run on and the
+  RNG it draws from are arguments to `run()`, not constructor parameters.
+- A factory's params struct contains only defining parameters.
 
 This separation prevents conflation in sampling, serialization, and
 composition.
@@ -215,18 +239,19 @@ composition.
 #### No free-floating functions for logic that has state or identity
 
 If a function constructs something, transforms something, or dispatches on
-type, it belongs as a classmethod, factory method, or method on an enum.
-Free functions are acceptable only for pure stateless utilities (math
-helpers, tensor manipulation).
+type, it belongs as an associated function, a method, or a method on an
+enum. Free functions are acceptable only for pure stateless utilities (math
+helpers, slice manipulation).
 
-- A factory that selects a subclass based on an enum value is a method on
-  the enum, or a classmethod on the base class.
-- A function that closes over parameters and returns a callable becomes a
-  callable class with `__call__`, so the captured parameters are inspectable
-  via properties. Raw lambdas are acceptable only for throwaway one-liners
-  in tests or examples, never in production code paths.
+- A factory that selects an implementation based on an enum value is a
+  method on the enum.
+- A function that captures parameters and returns a closure becomes a struct
+  that implements a trait, so the captured parameters are inspectable via
+  getters. Closures are fine as local, throwaway arguments (iterator
+  adapters, `sort_by`, tests); they are never stored in a struct field or
+  returned from a production function.
 
-#### Parameters belong inside closures, not alongside them
+#### Parameters belong inside callables, not alongside them
 
 When a function is parameterized (e.g., a scoring function with
 coefficients), the parameters are captured at construction time, not passed
@@ -234,46 +259,50 @@ at every call site.
 
 - Bad: `score_fn` and `score_params` as parallel fields, params passed to fn
   at every evaluation.
-- Good: the scoring callable captures its params; the call site invokes
-  `score(state)` with no extra arguments. The callable is a class (not a
-  lambda) exposing a `.params` property for serialization and debugging.
+- Good: the scoring object captures its params; the call site invokes
+  `score.evaluate(&state)` with no extra arguments. The callable is a struct
+  (not a closure) exposing a `params()` getter for serialization and
+  debugging.
 
 ### B. Typed interfaces over untyped data
 
-#### String-keyed dicts are not a typed interface
+#### String-keyed maps are not a typed interface
 
-`dict[str, float]` or `dict[str, Any]` configuration gives the caller no
-type checking, no autocompletion, and no safe refactoring. A misspelled key
-(`k_prodd` instead of `k_prod`) is a runtime `KeyError`, not a type error.
+`HashMap<String, f64>` or `serde_json::Value` configuration gives the caller
+no type checking, no autocompletion, and no safe refactoring. A misspelled
+key (`k_prodd` instead of `k_prod`) is a runtime failure, not a compile
+error.
 
 - More than two related parameters that could be misspelled are grouped into
-  a frozen dataclass with named, typed fields.
+  a struct with named, typed fields.
 - A factory that constructs objects from a parameter set takes a typed
-  dataclass, not a dict, and is generic over the params type.
-- The single place where string-keyed dicts become typed params is a
-  dedicated `from_dict()` / `params_from_dict()` method. No other code
-  indexes into a params dict by string key.
+  struct, not a map, and is generic over (or has an associated type for) the
+  params type.
+- The single place where untyped input becomes typed params is the params
+  type's `Deserialize` / `TryFrom` implementation, with
+  `#[serde(deny_unknown_fields)]`. No other code indexes into a map by
+  string key.
 - Modules sharing parameter values need no special "sharing" machinery;
-  Python variable binding of typed dataclass fields is sufficient.
+  passing the typed struct (by reference or `Copy`) is sufficient.
 
-#### Positional indexing into flat tensors is not an API
+#### Positional indexing into flat arrays is not an API
 
-If a tensor has semantic slots (`params[0]` = rate_constant, `params[1]` =
-k_m), the mapping is defined in exactly one place: a frozen dataclass with
-`to_tensor()` / `from_tensor()`. No code outside that dataclass indexes into
-the tensor by position.
+If a slice or vector has semantic slots (`params[0]` = rate_constant,
+`params[1]` = k_m), the mapping is defined in exactly one place: a struct
+with `to_array()` / `from_array()` (or `to_vec()` / `try_from_slice()`). No
+code outside that struct indexes into the array by position.
 
 ### C. Constants and single source of truth
 
-#### Structural constants belong inside the class
+#### Structural constants belong inside the type
 
-A constant intrinsic to a specific class is a `ClassVar` on that class, not
-a module-level variable. Module-level constants are only for genuinely
-module-wide values (a logger, a global registry). When several classes in
-one module each have structural constants, module-level placement leaves it
-ambiguous which constant belongs to which class. Constants callers might
-customize are exposed through the constructor with the `ClassVar` as the
-default.
+A constant intrinsic to a specific type is an associated constant in that
+type's `impl` block, not a module-level `const`. Module-level constants are
+only for genuinely module-wide values. When several types in one module each
+have structural constants, module-level placement leaves it ambiguous which
+constant belongs to which type. Constants callers might customize are
+exposed through the constructor or config, with the associated constant as
+the default.
 
 #### Structural constants have a single source of truth
 
@@ -281,17 +310,20 @@ When a dimension, count, or schema is determined by one module and consumed
 by another, define it once and have every consumer derive from it. Never
 duplicate a constant across files, even if both agree today.
 
-- If a feature vector has N channels, define an Enum listing the channels in
-  the module that constructs the vector and export `N = len(TheEnum)`.
-  Consumers import N.
+- If a feature vector has N channels, define an enum listing the channels in
+  the module that constructs the vector, give it an `ALL` array, and export
+  `N_CHANNELS = Channel::ALL.len()`. Consumers import it. Where the
+  dimension is known at compile time, carry it in the type
+  (`[f64; N_CHANNELS]`, const generics) so a mismatch does not compile.
 - Never store structural constants (dimensions dictated by the data format)
   in config. Config is for hyperparameters the user chooses; a dimension
   dictated by the code is a derived property.
 - If adding a channel requires changing more than two locations (the enum +
   the builder), the abstraction is leaking.
-- Co-locate field metadata (valid range, unit, description) with the field
-  via `dataclasses.field(metadata={...})`. A field name that appears in the
-  dataclass and again in a separate metadata dict keyed by string is a
+- Co-locate field metadata (valid range, unit, description) with the field's
+  type: a newtype per quantity carries its bounds as associated constants
+  and enforces them in its constructor. A field name that appears in the
+  struct and again in a separate metadata map keyed by string is a
   duplication bug waiting to happen.
 
 ### D. Module boundaries and layering
@@ -300,18 +332,19 @@ duplicate a constant across files, even if both agree today.
 
 Modules depend on interfaces, not on each other.
 
-- A downstream consumer (solver, encoder, renderer) accepts generic inputs
-  (matrices, tensors, callables), not a domain object. The domain object
-  provides what the consumer needs via a method; the consumer never imports
-  the domain class.
-- A neural network encoder consumes a tensor representation, not a symbolic
-  domain object. The symbolic-to-tensor conversion happens at an explicit
-  boundary (a dedicated converter module), not inside the encoder.
+- A downstream consumer (solver, integrator, writer) accepts generic inputs
+  (slices, matrices, a trait it defines itself), not a domain object. The
+  domain object provides what the consumer needs via a method or by
+  implementing the consumer's trait; the consumer never imports the domain
+  type.
+- The conversion between a symbolic domain object and its numeric
+  representation happens at an explicit boundary (a dedicated converter
+  module), not inside the numeric consumer.
 
 #### Translate at boundaries; do not modify endpoints to fit each other
 
 When two modules disagree on a convention (frame, units, schema), the fix is
-a translator class at the boundary, not a patch to either endpoint. The
+a translator type at the boundary, not a patch to either endpoint. The
 endpoints stay correct in their own domain; the translator is the only place
 that knows both. Even when an endpoint *could* internalize the conversion
 via a flag, prefer the external translator so the boundary is named.
@@ -323,25 +356,25 @@ via a flag, prefer the external translator so the boundary is named.
   setting propagating through every call. Multiple thin translators are
   healthier.
 - The endpoint to leave alone is the one correct in its own domain: a
-  third-party library staying bit-exact with upstream, a data source
+  third-party crate staying bit-exact with upstream, a data source
   faithfully representing its format.
 
 #### Shared utilities live in neutral modules; layering must not invert
 
-When two sibling packages need the same helper, move it to a shared, neutral
-module rather than reaching across package boundaries or duplicating it.
+When two sibling modules need the same helper, move it to a shared, neutral
+module rather than reaching across module boundaries or duplicating it.
 
-- A library package never imports from an application package. If a library
-  needs something an application provides, that something is mis-located.
+- A library module never imports from an application module (a binary, an
+  example, a benchmark). If a library needs something an application
+  provides, that something is mis-located.
 - Inlining a small helper into a second consumer to avoid the refactor is
   technical debt: the day the two copies diverge silently, the bug ships.
-- "Neutral" means the module sits at or above the level of every consumer
-  in the dependency graph, e.g. `<project_root>/<helper>.py`, not inside one
-  of the siblings.
+- "Neutral" means the module sits at or below every consumer in the
+  dependency graph, not inside one of the siblings.
 
 #### Organize by dependency layer, not by feature slice, when components are coupled
 
-Feature slices (one package per feature, each owning its types, logic, and
+Feature slices (one module per feature, each owning its types, logic, and
 API) work only when features are independent. When components exchange
 data, form a pipeline, or feed back into each other, feature-slicing forces
 them to import one another and the graph tangles. Decompose by layer:
@@ -361,126 +394,128 @@ consumes, define the exchanged objects in the core layer; both depend on
 core; an orchestrator on top closes the loop. The whole graph is a DAG.
 Decomposition test: can two components be built and tested without
 importing each other? If not, the shared part has not been pushed far
-enough down. Add an import-linter to CI so a layer violation fails the
-build.
+enough down. Once the layers are stable, split them into separate crates of
+a Cargo workspace: crates cannot depend on each other cyclically, so a
+layer violation fails the build.
 
-#### Never import private symbols across module boundaries
+#### Never widen visibility to reach across a module boundary
 
-A leading underscore means internal to its module. Other modules never
-import it.
+Private means internal to its module. Other modules never depend on it.
 
-- To dispatch on the type of an object from another module, use a protocol
-  (`hasattr` check), a registry keyed on a public type (e.g., the params
-  dataclass), or a method on the object itself. Never `isinstance` against a
-  private class from another module.
-- If you find yourself importing `_FooBar` from another module, stop. Either
-  make it public and commit to the interface, or redesign so the import is
-  unnecessary.
+- Do not raise an item to `pub(crate)` or `pub` just because another module
+  wants to peek at it. Either commit to it as part of the module's interface
+  or redesign so the access is unnecessary.
+- To dispatch on the kind of an object from another module, use a trait
+  method or an enum the object exposes. Never downcast (`Any`) to a concrete
+  type owned by another module.
 
-#### Notebooks and scripts must use the library, not reimplement it
+#### Binaries, examples, and benchmarks must use the library, not reimplement it
 
-More than 10 lines of notebook logic duplicating a library class (e.g., a
-training loop that mirrors the Trainer) is a bug. Call the public API; if
-the API does not support what the notebook needs, extend the API.
+More than 10 lines of logic in `src/bin/`, `examples/`, or `benches/` that
+duplicates a library type (e.g., a sampling loop that mirrors the sampler)
+is a bug. Call the public API; if the API does not support what the caller
+needs, extend the API.
 
-- Trainer returns a result object that notebooks can plot directly.
-- A custom training variant subclasses the Trainer or passes configuration;
+- The sampler returns a result object that callers can inspect and
+  serialize directly.
+- A custom variant implements the relevant trait or passes configuration;
   it does not copy-paste the loop.
 
 ### E. Validation and errors
 
 #### No silent fallbacks for missing data
 
-If a loss requires M >= 2 samples to compute variance and receives M = 1, it
-raises `ValueError`; it does not return zero. Silent fallbacks hide bugs.
+If an estimator requires M >= 2 samples to compute variance and receives
+M = 1, it returns an `Err`; it does not return zero. Silent fallbacks hide
+bugs.
 
-- Never return a zero tensor as a "safe default" for a loss that cannot be
-  computed. That is a gradient dead zone invisible during training.
-- Never silently squeeze, unsqueeze, or reshape tensors to make shapes match.
-  Raise a clear error stating expected and actual shapes.
-- When dispatching on a capability via `hasattr` or `Protocol`, the branch
-  for an object lacking the capability raises unless the fallback behavior
-  is provably correct. A plausible but incorrect result is worse than a
-  crash.
+- Never return `0.0`, `NaN`, or an empty collection as a "safe default" for
+  a quantity that cannot be computed. Never use `unwrap_or(0.0)` or
+  `unwrap_or_default()` to that effect.
+- Never let `NaN` or infinity cross a public boundary unannounced. Check
+  where they can first arise and return an error naming the input that
+  caused them.
+- Never silently truncate, pad, or broadcast to make lengths match. `zip`
+  stops at the shorter iterator without complaint: check lengths first and
+  return an error stating expected and actual lengths.
+- Integer arithmetic that can overflow uses `checked_*` and reports the
+  failure; `wrapping_*` and `saturating_*` are used only where that
+  arithmetic is the intended semantics.
+- When dispatching on an optional capability (a trait method returning
+  `Option`, a feature flag), the branch for an object lacking the capability
+  returns an error unless the fallback behavior is provably correct. A
+  plausible but incorrect result is worse than a crash.
 
 #### Validation errors must contain the remediation
 
-When a class rejects an input, the exception message tells the caller
-exactly how to fix it. "X is not Y" is insufficient; "X is not Y. Wrap it
-in `Z(...)`." is the minimum bar. This matters most at numerically critical
-boundaries (frame conventions, units, schemas), where the alternative to a
-clear error is a silent wrong output.
+When a type rejects an input, the error message tells the caller exactly how
+to fix it. "X is not Y" is insufficient; "X is not Y. Wrap it in `Z::new(...)`."
+is the minimum bar. This matters most at numerically critical boundaries
+(frame conventions, units, schemas), where the alternative to a clear error
+is a silent wrong output.
 
 - The reader of the error never needs to open the source. Include the
   remediation snippet, the suggested adapter, or the exact config change.
-- Pair with type-tagged contracts (enums, properties) so mismatches are
-  caught at construction, not after data has flowed.
+- Pair with type-tagged contracts (enums, newtypes) so mismatches are caught
+  at compile time or at construction, not after data has flowed.
 - Never auto-correct silently. The user should see the wrap / convert / cast
   in their own code; auto-correction is exactly the silent-bug pattern this
   rule prevents.
 
-### F. ML / Neural network specifics
+### F. Performance
 
-#### Prefer computable features over manual annotations for ML inputs
+Speed is the reason this project is written in Rust. These rules apply to
+hot paths; everywhere else, clarity wins.
 
-Feed the encoder features derived from the existing data structure rather
-than manually annotated categories.
+#### Measure before optimizing
 
-- Derived features (graph connectivity, statistical summaries, structural
-  properties) are always consistent with the data, cannot be mislabeled, and
-  generalize to novel structures.
-- Manual annotations require domain expertise, are incomplete by nature, and
-  let the model shortcut structural learning by memorizing labels.
-- If the encoder cannot distinguish important cases from structure alone,
-  enrich the computable features (edge features, sensitivity estimates)
-  before resorting to annotations.
+- A performance claim needs a number. Benchmark hot paths in `benches/`
+  (criterion) and profile release builds (`perf`, flamegraph) before and
+  after a change. An optimization without a measured gain is reverted.
+- Always measure with `--release`. Debug-build timings are meaningless.
 
-#### Network architecture details must be configurable, not hardcoded
+#### Hot-path conventions
 
-Layer counts, hidden dimensions, activations, and conditioning strategies
-are hyperparameters. They live in config dataclasses, not in constructor
-bodies.
+- No heap allocation inside hot loops. Allocate buffers once and reuse them;
+  pass scratch space as `&mut [f64]` rather than returning a fresh `Vec`
+  per call.
+- Borrow instead of cloning. A `.clone()` in a hot path needs a reason.
+- Use static dispatch (generics, `impl Trait`) so calls can be inlined.
+- Prefer iterators over index loops: they avoid bounds checks and make
+  length mismatches explicit.
+- Keep data contiguous: a flat `Vec<f64>` with a typed accessor, not
+  `Vec<Vec<f64>>`.
+- `unsafe` is denied crate-wide. An exception requires a measured gain, an
+  `#[allow(unsafe_code)]` on the smallest possible item, a `// SAFETY:`
+  comment stating why the invariants hold, a safe public wrapper, and a
+  test that exercises it.
 
-- Never write out a fixed sequence of `nn.Linear` / activation pairs. Loop
-  over an `n_hidden_layers` config value and store layers in
-  `nn.ModuleList`.
-- Extract a recurring pattern ("MLP with conditioning at every layer") into
-  its own `nn.Module` class. Networks sharing a pattern are instances of
-  that class, not copy-pasted `nn.Sequential` blocks.
-- Conditioning (FiLM, concatenation, cross-attention) is applied at every
-  hidden layer, not only at the output. Output-only conditioning restricts
-  the network to context-independent intermediate features.
+#### Parallelism and reproducibility
 
-#### Train sequential models on one-step objectives first
-
-For models that generate sequences (trajectories, time series,
-autoregressive outputs), the primary training objective is a one-step
-prediction loss with teacher forcing. Full-rollout losses are for validation
-and optional fine-tuning.
-
-- Full rollout compounds early errors; by step T the model is far from the
-  training distribution and gradients are noisy.
-- Teacher forcing keeps every training step on-distribution.
-- When the model defines a tractable per-step likelihood (e.g., Gaussian
-  transitions in an Euler-Maruyama SDE), use the negative log-likelihood as
-  the loss. It trains mean and variance jointly and removes arbitrary
-  loss-weighting hyperparameters.
-- To bridge teacher-forced training and free-running inference, use
-  scheduled sampling: start at 100% teacher forcing and gradually increase
-  the fraction of steps that use the model's own predictions.
+- Parallelize at the outermost level of independent work (e.g. over
+  particles), not inside the inner numeric kernels.
+- Library code never uses a global or thread-local RNG. Every stochastic
+  function takes its RNG as an argument (`&mut impl Rng`), and a run is
+  fully determined by its seed.
+- Parallel work derives one independent RNG stream per unit of work from
+  the run seed, so results do not depend on thread count or scheduling.
 
 ---
 
 ## Documentation
 
-- **Docstrings**: Google style on all public classes, methods, and functions,
-  with `Args:`, `Returns:`, and `Raises:` sections where applicable.
-- Private/protected methods get a one-line docstring explaining intent,
-  unless the name is fully self-documenting.
-- Module-level docstrings at the top of each `.py` file explain the module's
-  purpose in one to three sentences.
-- No docstrings that restate the name (`"""Gets the name."""` on
-  `get_name`).
+- **Doc comments**: rustdoc `///` on all public types, traits, methods, and
+  functions, with `# Errors`, `# Panics`, `# Safety`, and `# Examples`
+  sections where applicable. `missing_docs` is enforced by the lint
+  configuration.
+- Private items get a one-line doc comment explaining intent, unless the
+  name is fully self-documenting.
+- A module-level `//!` comment at the top of each `.rs` file explains the
+  module's purpose in one to three sentences.
+- No doc comments that restate the name (`/// Returns the name.` on
+  `name()`).
+- Examples in doc comments are compiled and run by `cargo test`; keep them
+  correct and minimal.
 
 ---
 
@@ -488,80 +523,65 @@ and optional fine-tuning.
 
 ### Structure
 
-Tests mirror the source tree exactly: `src/<package>/foo/bar.py` has
-`tests/foo/test_bar.py`. Because modules are named after their class, each
-substantial class gets its own test module. Every test directory has an
-`__init__.py`.
+- **Unit tests** live in a `#[cfg(test)] mod tests` at the bottom of the
+  module they test, so tests mirror the source tree by construction.
+- **Integration tests** live in `tests/`, one file per area of the public
+  API, and can only see the crate's public interface.
+- Shared integration-test helpers live in `tests/common/mod.rs`.
 
 ### Philosophy
 
 - **Test external interfaces, not internal behavior.** Test a private
-  (`_`-prefixed) method through the public method that calls it.
+  function through the public method that calls it, even though a unit-test
+  module is able to reach it.
 - **Tests explain why they exist.** Names state the contract verified:
-  `test_exponential_decay_matches_analytical`.
+  `exponential_decay_matches_analytical`.
 - **Use analytical references for numerical tests**, not
   cross-implementation comparisons.
-- **Statistical tests use wide tolerances** and enough samples to keep the
-  flaky failure rate below 1%.
-- **Do not test trivial behavior.** Dataclass field defaults, enum string
-  values, and `__repr__` need no tests. Test validation logic
-  (`__post_init__` that raises on invalid inputs).
+- **Statistical tests use a fixed seed, wide tolerances**, and enough
+  samples to keep the failure rate below 1% if the seed changes.
+- **Do not test trivial behavior.** Getters, derived `Debug`/`Clone`, and
+  enum variants need no tests. Test validation logic (constructors that
+  return `Err` on invalid inputs).
 
 ### Fixtures and Stubs
 
-- `conftest.py` files provide stubs that satisfy interfaces without
-  importing heavyweight modules.
+- Test doubles are small structs implementing the trait under test's
+  dependency; they do not pull in heavyweight modules.
 - Downstream component tests do NOT depend on upstream components being
   correct; use fakes or stubs to isolate.
-- Prefer factory fixtures over mutable shared state.
+- Prefer fixture-building functions over shared mutable state.
 
 ### Conventions
 
-- Use `pytest`. No unittest-style classes unless grouping is genuinely
-  needed.
-- Use `pytest.mark.parametrize` for the same logic across multiple inputs.
-- Use `pytest.approx` or `torch.testing.assert_close` with explicit
-  tolerances for numerical comparisons.
-- Guard tests that depend on optional packages with `pytest.mark.skipif`.
-- All tests are fast (<5 seconds each), use tiny configs and minimal data,
-  and run on CPU only.
+- Use the built-in test harness (`#[test]`, `cargo test`).
+- For the same logic across multiple inputs, iterate over a table of named
+  cases and include the case name in the assertion message.
+- Never compare floats with `==`. Compare with an explicit absolute or
+  relative tolerance.
+- Tests that return `Result` use `?`; `unwrap()` is acceptable in tests.
+- Gate tests that depend on an optional feature with
+  `#[cfg(feature = "...")]`.
+- All tests are fast (<5 seconds each) and use tiny configs and minimal
+  data. Mark anything slower `#[ignore]` with a reason.
 
 ### What to prioritize when writing new tests
 
 1. **Data pipeline correctness** (corrupted inputs silently poison
    everything downstream).
-2. **Loss function numerics** (sign/normalization bugs are silent and
-   devastating).
-3. **Interface contracts** (type hierarchy, protocol compliance, batch vs.
-   single-item consistency).
+2. **Estimator and likelihood numerics** (sign/normalization bugs are silent
+   and devastating).
+3. **Interface contracts** (trait implementations, single-item vs. batched
+   consistency).
 4. **Factory/builder correctness** (config-to-object mapping dispatches to
-   the correct classes).
+   the correct implementations).
 
 ### What to skip
 
-- `__repr__` methods and dataclass field defaults (unless validation logic
-  exists).
-- Full training loop integration (too slow for unit tests).
+- Derived trait implementations and trivial getters (unless validation
+  logic exists).
+- Full-scale sampling runs (too slow for unit tests).
 - External service integrations (require live credentials).
-
----
-
-## PyTorch Conventions
-
-- All `nn.Module` subclasses call `super().__init__()` first.
-- Define sub-modules in `__init__`, compute in `forward`. No module creation
-  inside `forward`.
-- Name tensor dimensions in comments where shapes are non-obvious:
-  `# (batch, n_features, d_model)`.
-- Use `torch.no_grad()` explicitly for inference and evaluation.
-- Prefer `torch.nn.functional` for stateless operations; use `nn.Module`
-  wrappers for stateful ones (layers with parameters).
-- **Never loop over a batch dimension in Python.** If the same operation
-  applies to N independent items, reshape them into one batch tensor and run
-  one forward pass. Python loops launch thousands of tiny kernels; one
-  batched operation launches one, typically 10-100x faster. To support both
-  single-item and batched input, branch on `dim()` at the entry point, not
-  by looping internally.
 
 ---
 
@@ -571,5 +591,5 @@ substantial class gets its own test module. Every test directory has an
   the data loader".
 - One logical change per commit. Do not mix refactoring with feature
   additions.
-- Run `uv run tox` (or at minimum `uv run pytest` + `uv run tox -e lint`)
-  before every commit. Commit `uv.lock` whenever dependencies change.
+- Run `make check` (format check, clippy, rustdoc, tests) before every
+  commit. Commit `Cargo.lock` whenever dependencies change.

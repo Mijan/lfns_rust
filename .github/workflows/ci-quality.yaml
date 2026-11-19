@@ -8,64 +8,45 @@ on:
   workflow_dispatch:
 
 env:
-  # Fail if uv.lock is out of date with pyproject.toml instead of re-resolving.
-  UV_LOCKED: "1"
+  CARGO_TERM_COLOR: always
 
 jobs:
-  lint-and-type:
-    name: Lint & Type
+  lint-and-docs:
+    name: Format, Lint & Docs
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          enable-cache: true
-          python-version: "3.12"
+          components: rustfmt, clippy
 
-      - name: Install tox
-        run: uv sync --only-group dev
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
       - name: Formatting check
-        run: uv run tox -e format_check
+        run: make format_check
 
       - name: Lint
-        run: uv run tox -e lint
+        run: make lint
 
-      - name: Type check
-        run: uv run tox -e type
-
-      - name: Docstring coverage
-        run: uv run tox -e docs
+      - name: Documentation
+        run: make docs
 
   tests:
     name: Tests
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          python-version: ${{ matrix.python-version }}
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Install tox
-        run: uv sync --only-group dev
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        run: uv run tox -e py312
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ matrix.python-version }}
-          path: test-results
+        run: make test

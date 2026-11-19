@@ -1,0 +1,1 @@
+//! Likelihood-free nested sampling.
