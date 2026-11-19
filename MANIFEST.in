@@ -1,0 +1,17 @@
+# Include core metadata
+include README.md
+include LICENSE
+include pyproject.toml
+
+global-exclude *.pyc __pycache__ *.pyo *.pyd
+prune .github
+exclude tox.ini
+exclude uv.lock
+exclude .gitignore
+exclude .python-version
+prune */__pycache__
+prune */*.egg-info
+prune build
+prune dist
+prune tests
+prune notebooks

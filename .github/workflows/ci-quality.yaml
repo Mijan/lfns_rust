@@ -1,0 +1,71 @@
+# .github/workflows/ci-quality.yaml
+name: CI Quality
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Fail if uv.lock is out of date with pyproject.toml instead of re-resolving.
+  UV_LOCKED: "1"
+
+jobs:
+  lint-and-type:
+    name: Lint & Type
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install tox
+        run: uv sync --only-group dev
+
+      - name: Formatting check
+        run: uv run tox -e format_check
+
+      - name: Lint
+        run: uv run tox -e lint
+
+      - name: Type check
+        run: uv run tox -e type
+
+      - name: Docstring coverage
+        run: uv run tox -e docs
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install tox
+        run: uv sync --only-group dev
+
+      - name: Run tests
+        run: uv run tox -e py312
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: test-results
