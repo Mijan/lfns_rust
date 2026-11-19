@@ -10,10 +10,10 @@ format_check:
 	cargo fmt --all -- --check
 
 lint:
-	cargo clippy --all-targets --all-features --locked -- -D warnings
+	cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 docs:
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 
 test:
-	cargo test --all-features --locked
+	cargo test --workspace --all-features --locked

@@ -1,25 +1,26 @@
-[package]
-name = "lfns"
+[workspace]
+resolver = "3"
+members = ["crates/lfns"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Likelihood-free nested sampling"
 license = "MIT"
-readme = "README.md"
 
-[dependencies]
-
-[lints.rust]
+[workspace.lints.rust]
 missing_docs = "warn"
 missing_debug_implementations = "warn"
 unsafe_code = "deny"
 
-[lints.rustdoc]
+[workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 unwrap_used = "warn"
+# Field prefixes such as `log_` state the unit of a value and are kept.
+struct_field_names = "allow"
 
 # Tuned for run time over compile time: whole-program inlining across crates.
 [profile.release]

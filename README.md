@@ -5,18 +5,22 @@ Likelihood-free nested sampling, written in Rust for speed.
 ## Repository Structure
 
     .
-    ├── .github/workflows/ci-quality.yaml
-    ├── Cargo.toml          # package metadata, lints, release profile
-    ├── Cargo.lock          # committed; CI builds with --locked
-    ├── clippy.toml         # clippy thresholds
-    ├── Makefile            # quality gates (same commands CI runs)
-    ├── src/lib.rs          # crate root
-    ├── CLAUDE.md           # code style and architecture rules
+    ├── Cargo.toml              # workspace: shared lints and release profile
+    ├── Cargo.lock              # committed; CI builds with --locked
+    ├── clippy.toml, rustfmt.toml
+    ├── Makefile                # quality gates (same commands CI runs)
+    ├── crates/
+    │   └── lfns/               # model-agnostic LF-NS algorithm
+    │       ├── src/
+    │       └── tests/          # integration tests on analytical problems
+    ├── notes/                  # paper and supplementary material
+    ├── CLAUDE.md               # code style and architecture rules
     └── README.md
 
-Unit tests live next to the code in `#[cfg(test)] mod tests`; integration
-tests that exercise the public API go in `tests/`; benchmarks go in
-`benches/`.
+The `lfns` crate contains the sampling loop, the evidence estimate with its
+variance and termination criterion, reproducible parallel proposal
+evaluation, and checkpointing. A model plugs in through the
+`LikelihoodEstimator` trait and a proposal scheme through `ProposalFitter`.
 
 ## Getting Started
 
