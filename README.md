@@ -16,6 +16,7 @@ Likelihood-free nested sampling, written in Rust for speed.
     │   ├── lfns-model/         # SBML and PEtab models, ODE and stochastic simulation
     │   └── lfns-py/            # Python bindings of lfns (for the notebooks)
     ├── examples/               # example problems (Antimony, SBML, PEtab)
+    ├── tools/                  # scripts: run a PEtab problem, export, cross-check
     ├── notebooks/              # Jupyter notebooks illustrating the crates
     ├── pyproject.toml, uv.lock # Python environment of the notebooks
     ├── notes/                  # paper and supplementary material
@@ -33,8 +34,7 @@ Likelihood-free nested sampling, written in Rust for speed.
   (version 1) and provides its likelihood in two ways: exactly, by
   integrating the model as an ODE with a stiff solver, or as an unbiased
   estimate, by simulating it stochastically and running a bootstrap particle
-  filter. Only a subset of SBML and PEtab is supported so far; unsupported
-  input is rejected with an error that names it.
+  filter. See *Supported SBML and PEtab* below.
 
 Each crate keeps its unit tests next to the code and its integration tests,
 which run on problems with known answers, in `tests/`.
@@ -49,6 +49,57 @@ cargo build            # debug build
 cargo build --release  # optimized build (fat LTO, one codegen unit)
 cargo test
 ```
+
+## Running a PEtab problem
+
+``` bash
+uv sync      # once: builds the Rust code and its Python bindings
+uv run python tools/run_petab_problem.py --problem <folder>/problem.yaml \
+    --run-directory <folder for this run> --n-live 2000 --n-replaced 200
+```
+
+The run prints one line per iteration and checkpoints itself in the run
+directory after every iteration. Interrupt it at any time and continue with
+the same command plus `--resume`; a resumed run reproduces an uninterrupted
+one exactly. When it stops it writes `summary.json` (evidence, predicted
+error, stop reason, cost) and `posterior.csv` (weighted posterior sample in
+parameter values) into the run directory. `--help` lists all settings.
+
+The same is available from Python as `lfns.PetabProblem(path).run(...)`; the
+notebooks show it.
+
+### Supported SBML and PEtab
+
+- **SBML**: compartments with a constant size; species; parameters;
+  reactions with kinetic laws; rate rules on species; assignment rules on
+  parameters; events that assign parameters at a fixed time (trigger
+  `time >= constant`), which is how piecewise-constant inputs such as feed
+  schedules are expressed. Formulas may use arithmetic, powers, `exp`, `ln`,
+  `log`, `sqrt`, `abs`, `max`, `min`, comparisons, and `piecewise`.
+- **PEtab version 1**: one model; condition tables that set initial species
+  values and parameters to numbers; normal measurement noise with a noise
+  formula; parameters on a linear, `log`, or `log10` scale with the default
+  prior (uniform on that scale between the bounds); trajectories identified
+  by condition and `replicateId`.
+- **Dynamics**: deterministic (ODE) for every supported model; stochastic
+  only for models that consist of reactions alone.
+
+Anything else (function definitions, initial assignments, state-triggered
+events, other priors or noise distributions, pre-equilibration) is rejected
+when the problem is loaded, with an error that names it. Antimony is not
+read directly: convert it to SBML with the `antimony` package, as in
+`examples/birth_death/README.md`.
+
+### Tools
+
+- `tools/run_petab_problem.py`: runs a problem, as above.
+- `tools/simulate_with_roadrunner.py`: simulates a problem at its nominal
+  parameters with RoadRunner, as an independent reference for the ODE
+  simulation of this repository. Needs an environment with `roadrunner`.
+- `tools/export_campaign_petab.py`: writes a culture-fit campaign of the
+  Cultzyme model-training playground as a PEtab problem. It runs in the
+  playground's environment and reads the playground's data; see its
+  docstring.
 
 ## Notebooks
 

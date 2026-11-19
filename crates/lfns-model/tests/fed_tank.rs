@@ -64,7 +64,7 @@ fn each_run_follows_its_own_schedule_and_initial_state() -> TestResult {
         problem
             .conditions()
             .iter()
-            .map(|condition| condition.id())
+            .map(lfns_model::ExperimentalCondition::id)
             .collect::<Vec<_>>(),
         ["run_a", "run_b"]
     );
