@@ -3,6 +3,32 @@
 
 use ::lfns::{CheckpointStore, ComponentFailure, IterationReport, LfnsError, RunRecorder, RunState};
 
+/// Worst, median, and best log-likelihood of the live particles: where the
+/// population stands, which the evidence alone does not show.
+struct LiveLikelihoodSpread {
+    worst: f64,
+    median: f64,
+    best: f64,
+}
+
+impl LiveLikelihoodSpread {
+    /// The spread of the live particles of `state`; `None` if it has none.
+    fn of(state: &RunState) -> Option<Self> {
+        let mut log_likelihoods: Vec<f64> = state
+            .live()
+            .particles()
+            .iter()
+            .map(::lfns::Particle::log_likelihood)
+            .collect();
+        log_likelihoods.sort_unstable_by(f64::total_cmp);
+        Some(Self {
+            worst: *log_likelihoods.first()?,
+            median: log_likelihoods[log_likelihoods.len() / 2],
+            best: *log_likelihoods.last()?,
+        })
+    }
+}
+
 /// Keeps every iteration report in memory, forwards the run to a checkpoint
 /// store if one was requested, and prints one line per iteration if asked.
 pub(crate) struct ReportRecorder {
@@ -29,10 +55,19 @@ impl ReportRecorder {
         }
     }
 
-    fn print_progress(report: &IterationReport) {
+    /// One line per iteration: the evidence, what the iteration cost, and
+    /// the log-likelihoods of the live particles after it.
+    fn print_progress(state: &RunState, report: &IterationReport) {
         let evidence = report.evidence();
+        let live = LiveLikelihoodSpread::of(state).map_or_else(String::new, |spread| {
+            format!(
+                ", live ln L: worst {:.1}, median {:.1}, best {:.1}",
+                spread.worst, spread.median, spread.best
+            )
+        });
         eprintln!(
-            "iteration {:>5}: ln Z = {:>12.4} +- {:.4}, to improve {:.4}, acceptance {:.3}, {} evaluations, {} failed",
+            "iteration {:>5}: ln Z = {:>12.4} +- {:.4}, to improve {:.4}, acceptance {:.3}, {} evaluations, \
+             {} failed{live}",
             report.iteration(),
             evidence.log_evidence(),
             evidence.relative_std(),
@@ -59,7 +94,7 @@ impl RunRecorder for ReportRecorder {
 
     fn record_iteration(&mut self, state: &RunState, report: &IterationReport) -> Result<(), ComponentFailure> {
         if self.prints_progress {
-            Self::print_progress(report);
+            Self::print_progress(state, report);
         }
         self.reports.push(*report);
         self.store
