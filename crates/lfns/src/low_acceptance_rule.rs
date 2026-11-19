@@ -42,6 +42,10 @@ pub struct LowAcceptanceRule {
 }
 
 impl LowAcceptanceRule {
+    /// Default acceptance rate below which the rule applies: one accepted
+    /// proposal in a thousand.
+    pub const DEFAULT_ACCEPTANCE_THRESHOLD: f64 = 0.001;
+
     /// Default fraction of the mixture's own draws cut off after a poor
     /// acceptance rate.
     pub const DEFAULT_REJECTION_QUANTILE: f64 = 0.2;
@@ -99,6 +103,17 @@ impl LowAcceptanceRule {
     #[must_use]
     pub fn applies_after(&self, previous_acceptance_rate: Option<f64>) -> bool {
         previous_acceptance_rate.is_some_and(|rate| rate < self.acceptance_threshold)
+    }
+}
+
+impl Default for LowAcceptanceRule {
+    /// The rule with [`Self::DEFAULT_ACCEPTANCE_THRESHOLD`] and
+    /// [`Self::DEFAULT_REJECTION_QUANTILE`].
+    fn default() -> Self {
+        Self {
+            acceptance_threshold: Self::DEFAULT_ACCEPTANCE_THRESHOLD,
+            rejection_quantile: Self::DEFAULT_REJECTION_QUANTILE,
+        }
     }
 }
 

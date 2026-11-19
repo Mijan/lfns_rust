@@ -267,7 +267,7 @@ impl PyPetabProblem {
         *, n_live, n_replaced, dynamics = "stochastic", n_particles = None, seed = 0,
         termination_tolerance = RunConfig::DEFAULT_TERMINATION_TOLERANCE, max_iterations = None,
         proposal = "dpgmm", rejection_quantile = ::lfns::DpgmmProposalConfig::DEFAULT_REJECTION_QUANTILE,
-        n_sweeps = ::dpgmm::DpgmmConfig::DEFAULT_N_SWEEPS, low_acceptance_threshold = None,
+        n_sweeps = ::dpgmm::DpgmmConfig::DEFAULT_N_SWEEPS, low_acceptance_threshold = Some(LowAcceptanceRule::DEFAULT_ACCEPTANCE_THRESHOLD),
         low_acceptance_quantile = LowAcceptanceRule::DEFAULT_REJECTION_QUANTILE,
         run_directory = None, resume = false, progress = false,
     ))]

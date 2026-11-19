@@ -59,7 +59,7 @@ impl ProposalChoice {
             .with_rejection_quantile(settings.rejection_quantile)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let Some(threshold) = settings.low_acceptance_threshold else {
-            return Ok(config);
+            return Ok(config.without_low_acceptance_rule());
         };
         let rule = LowAcceptanceRule::below(threshold)
             .and_then(|rule| rule.with_rejection_quantile(settings.low_acceptance_quantile))

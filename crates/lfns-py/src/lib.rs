@@ -43,9 +43,9 @@ pub(crate) fn to_value_error(error: impl std::fmt::Display) -> PyErr {
 ///
 /// `proposal` is `"dpgmm"` (uniform over the support of a DP-GMM fit to the
 /// live points) or `"prior"` (the whole unit cube). The DP-GMM region keeps
-/// all but the fraction `rejection_quantile` of the fitted mixture. With
-/// `low_acceptance_threshold`, an iteration that follows one whose
-/// acceptance rate was below that threshold cuts off the fraction
+/// all but the fraction `rejection_quantile` of the fitted mixture. An
+/// iteration that follows one whose acceptance rate was below
+/// `low_acceptance_threshold` (`None` switches this off) cuts off the fraction
 /// `low_acceptance_quantile` instead: a tighter region that accepts more
 /// often but covers less of the mixture's tails. With `run_directory` the
 /// run is checkpointed there after every iteration, and `resume=True`
@@ -56,7 +56,7 @@ pub(crate) fn to_value_error(error: impl std::fmt::Display) -> PyErr {
     log_likelihood, n_parameters, *, n_live, n_replaced, seed = 0,
     termination_tolerance = RunConfig::DEFAULT_TERMINATION_TOLERANCE, max_iterations = None,
     proposal = "dpgmm", rejection_quantile = DpgmmProposalConfig::DEFAULT_REJECTION_QUANTILE,
-    n_sweeps = DpgmmConfig::DEFAULT_N_SWEEPS, low_acceptance_threshold = None,
+    n_sweeps = DpgmmConfig::DEFAULT_N_SWEEPS, low_acceptance_threshold = Some(LowAcceptanceRule::DEFAULT_ACCEPTANCE_THRESHOLD),
     low_acceptance_quantile = LowAcceptanceRule::DEFAULT_REJECTION_QUANTILE,
     run_directory = None, resume = false, progress = false,
 ))]

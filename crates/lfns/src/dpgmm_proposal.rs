@@ -96,6 +96,16 @@ impl DpgmmProposalConfig {
         }
     }
 
+    /// Returns a copy without a low-acceptance rule: the floor stays at
+    /// [`Self::rejection_quantile`] whatever the acceptance rate.
+    #[must_use]
+    pub fn without_low_acceptance_rule(self) -> Self {
+        Self {
+            low_acceptance_rule: None,
+            ..self
+        }
+    }
+
     /// Quantile at which the floor is placed, unless the low-acceptance
     /// rule applies.
     #[must_use]
@@ -130,7 +140,7 @@ impl Default for DpgmmProposalConfig {
         Self {
             mixture: DpgmmConfig::default(),
             rejection_quantile: Self::DEFAULT_REJECTION_QUANTILE,
-            low_acceptance_rule: None,
+            low_acceptance_rule: Some(LowAcceptanceRule::default()),
         }
     }
 }
@@ -286,7 +296,7 @@ mod tests {
 
     #[test]
     fn without_a_rule_the_acceptance_rate_does_not_matter() -> Result<(), DpgmmProposalError> {
-        let fitter = DpgmmProposalFitter::default();
+        let fitter = DpgmmProposalFitter::new(DpgmmProposalConfig::default().without_low_acceptance_rule());
         let fit_after = |rate: Option<f64>| {
             let mut rng = ChaCha8Rng::seed_from_u64(3);
             fitter.fit(&live_points(), FitContext::after(rate), &mut rng)
