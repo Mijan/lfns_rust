@@ -133,16 +133,18 @@ impl<'a> DeterministicSimulator<'a> {
                 n_species,
             )
             .build()
-            .map_err(Self::failure)?;
+            .map_err(|error| Self::failure(&error))?;
         problem.ode_options.max_number_timesteps = self.settings.max_steps;
-        let mut solver = problem.bdf::<NalgebraLU<f64>>().map_err(Self::failure)?;
-        let (solution, _stop_reason) = solver.solve_dense(times).map_err(Self::failure)?;
+        let mut solver = problem
+            .bdf::<NalgebraLU<f64>>()
+            .map_err(|error| Self::failure(&error))?;
+        let (solution, _stop_reason) = solver.solve_dense(times).map_err(|error| Self::failure(&error))?;
         Ok((0..times.len())
             .map(|column| (0..n_species).map(|row| solution[(row, column)]).collect())
             .collect())
     }
 
-    fn failure(error: diffsol::DiffsolError) -> SimulationFailure {
+    fn failure(error: &diffsol::DiffsolError) -> SimulationFailure {
         SimulationFailure::SolverFailed {
             message: error.to_string(),
         }

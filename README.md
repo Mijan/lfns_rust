@@ -13,7 +13,7 @@ Likelihood-free nested sampling, written in Rust for speed.
     │   ├── dpgmm/              # Dirichlet process Gaussian mixture density estimation
     │   ├── dpgmm-py/           # Python bindings of dpgmm (for the notebooks)
     │   ├── lfns/               # model-agnostic LF-NS algorithm
-    │   ├── lfns-model/         # SBML and PEtab models, stochastic simulation, particle filter
+    │   ├── lfns-model/         # SBML and PEtab models, ODE and stochastic simulation
     │   └── lfns-py/            # Python bindings of lfns (for the notebooks)
     ├── examples/               # example problems (Antimony, SBML, PEtab)
     ├── notebooks/              # Jupyter notebooks illustrating the crates
@@ -30,10 +30,11 @@ Likelihood-free nested sampling, written in Rust for speed.
   checkpointing, and the DP-GMM proposal. A model plugs in through the
   `LikelihoodEstimator` trait.
 - `lfns-model` reads a model from SBML and an estimation problem from PEtab
-  (version 1), simulates the model stochastically, and estimates the
-  likelihood with a bootstrap particle filter. Only a subset of SBML and
-  PEtab is supported so far, and deterministic (ODE) simulation is not
-  implemented yet; unsupported input is rejected with an error that names it.
+  (version 1) and provides its likelihood in two ways: exactly, by
+  integrating the model as an ODE with a stiff solver, or as an unbiased
+  estimate, by simulating it stochastically and running a bootstrap particle
+  filter. Only a subset of SBML and PEtab is supported so far; unsupported
+  input is rejected with an error that names it.
 
 Each crate keeps its unit tests next to the code and its integration tests,
 which run on problems with known answers, in `tests/`.
@@ -67,6 +68,9 @@ uv sync --reinstall-package dpgmm --reinstall-package lfns   # rebuild after cha
 - `notebooks/birth_death_petab.ipynb`: the birth-death example of the paper
   from Antimony and PEtab files to a posterior, with the model simulated in
   Rust and every step checked against the exact likelihood.
+- `notebooks/birth_death_ode_petab.ipynb`: the same model and data treated
+  as an ODE with three estimated parameters, checked against the exact
+  evidence and posterior.
 - `notebooks/lfns_toy_problem.ipynb`: one LF-NS run followed from start to
   finish on a problem with known evidence and posterior, with an exact and
   with a noisy likelihood.

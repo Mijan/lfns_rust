@@ -52,7 +52,7 @@ impl Expression {
     ///
     /// # Errors
     ///
-    /// Returns [`ModelError::Formula`] with the position of the first
+    /// Returns [`crate::ModelError::Formula`] with the position of the first
     /// character that cannot be parsed.
     pub fn parse(formula: &str) -> Result<Self, crate::model_error::ModelError> {
         crate::formula_parser::FormulaParser::parse(formula)

@@ -140,6 +140,9 @@ impl PyPetabProblem {
     /// With `dynamics="deterministic"` the ODE is solved and the observables
     /// are their noise-free expected values.
     #[pyo3(signature = (parameters, times, seed = 0, *, dynamics = "stochastic"))]
+    // Besides `self` and the interpreter token, the arguments are the Python
+    // signature of the method.
+    #[allow(clippy::too_many_arguments)]
     fn simulate<'py>(
         &self,
         py: Python<'py>,
