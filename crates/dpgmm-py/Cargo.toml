@@ -1,0 +1,27 @@
+[package]
+name = "dpgmm-py"
+description = "Python bindings of the dpgmm crate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "dpgmm"
+crate-type = ["cdylib"]
+# An extension module links against the interpreter that imports it, so it
+# cannot be linked into a stand-alone test executable.
+test = false
+doctest = false
+doc = false
+
+[dependencies]
+dpgmm = { path = "../dpgmm" }
+numpy = "0.30"
+pyo3 = { version = "0.30", features = ["extension-module"] }
+rand = "0.10"
+rand_chacha = "0.10"
+
+[lints]
+workspace = true

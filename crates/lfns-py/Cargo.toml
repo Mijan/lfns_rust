@@ -1,0 +1,28 @@
+[package]
+name = "lfns-py"
+description = "Python bindings of the lfns crate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "lfns"
+crate-type = ["cdylib"]
+# An extension module links against the interpreter that imports it, so it
+# cannot be linked into a stand-alone test executable.
+test = false
+doctest = false
+doc = false
+
+[dependencies]
+dpgmm = { path = "../dpgmm" }
+lfns = { path = "../lfns" }
+numpy = "0.30"
+pyo3 = { version = "0.30", features = ["extension-module"] }
+rand = "0.10"
+thiserror = "2"
+
+[lints]
+workspace = true

@@ -11,7 +11,10 @@ Likelihood-free nested sampling, written in Rust for speed.
     ├── Makefile                # quality gates (same commands CI runs)
     ├── crates/
     │   ├── dpgmm/              # Dirichlet process Gaussian mixture density estimation
+    │   ├── dpgmm-py/           # Python bindings of dpgmm (for the notebooks)
     │   └── lfns/               # model-agnostic LF-NS algorithm
+    ├── notebooks/              # Jupyter notebooks illustrating the crates
+    ├── pyproject.toml, uv.lock # Python environment of the notebooks
     ├── notes/                  # paper and supplementary material
     ├── CLAUDE.md               # code style and architecture rules
     └── README.md
@@ -37,6 +40,22 @@ cargo build            # debug build
 cargo build --release  # optimized build (fat LTO, one codegen unit)
 cargo test
 ```
+
+## Notebooks
+
+The notebooks are written in Python and call the Rust code through bindings
+(`crates/dpgmm-py`). They are illustrations, not tests, and are committed
+with their outputs so they can be read without running them.
+
+``` bash
+uv sync                              # builds the bindings in release mode
+uv run jupyter lab                   # opens the notebooks in the browser
+uv sync --reinstall-package dpgmm    # rebuild after changing Rust code
+```
+
+- `notebooks/dpgmm_density_estimation.ipynb`: DP-GMM fits in one and two
+  dimensions, their variability, runtimes, and the proposal region LF-NS
+  derives from a fit.
 
 ## Quality Checks
 

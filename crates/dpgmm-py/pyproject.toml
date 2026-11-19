@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "dpgmm"
+description = "Dirichlet process Gaussian mixture density estimation (Rust core)"
+requires-python = ">=3.12"
+dependencies = ["numpy"]
+dynamic = ["version"]
+
+[tool.maturin]
+profile = "release"

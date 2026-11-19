@@ -1,0 +1,114 @@
+//! Python bindings of the `lfns` crate, for notebooks and analysis scripts.
+//!
+//! The module exposes `run`, which performs a likelihood-free nested
+//! sampling run with a likelihood written in Python, and the `RunResult` it
+//! returns. Parameters live in the unit cube (prior-CDF space).
+
+// PyO3 hands extracted arguments to a function by value.
+#![allow(clippy::needless_pass_by_value)]
+
+mod proposal_choice;
+mod python_estimator;
+mod report_recorder;
+mod run_result;
+
+use std::path::PathBuf;
+
+use ::dpgmm::DpgmmConfig;
+use ::lfns::{CheckpointStore, DpgmmProposalConfig, NestedSampler, Population, RunConfig};
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+
+use crate::proposal_choice::ProposalChoice;
+use crate::python_estimator::PythonEstimator;
+use crate::report_recorder::ReportRecorder;
+use crate::run_result::PyRunResult;
+
+/// Turns a Rust error into a Python `ValueError` carrying its message.
+fn to_value_error(error: impl std::fmt::Display) -> PyErr {
+    PyValueError::new_err(error.to_string())
+}
+
+fn build_config(
+    population: (u32, u32),
+    seed: u64,
+    termination_tolerance: f64,
+    max_iterations: Option<u32>,
+) -> PyResult<RunConfig> {
+    let population = Population::new(population.0, population.1).map_err(to_value_error)?;
+    let config = RunConfig::new(population, seed)
+        .with_termination_tolerance(termination_tolerance)
+        .map_err(to_value_error)?;
+    Ok(max_iterations.map_or(config, |limit| config.with_max_iterations(limit)))
+}
+
+/// Runs likelihood-free nested sampling.
+///
+/// `log_likelihood(unit_point, seed)` receives a point of the unit cube as a
+/// `NumPy` array and a 64-bit seed for any randomness it needs. It returns the
+/// log-likelihood (one realization of an unbiased estimate for a stochastic
+/// model), `-inf` for zero likelihood, or `None` if the evaluation failed.
+/// An exception raised by it stops the run and is re-raised.
+///
+/// `proposal` is `"dpgmm"` (uniform over the support of a DP-GMM fit to the
+/// live points) or `"prior"` (the whole unit cube). With `run_directory` the
+/// run is checkpointed there after every iteration.
+#[pyfunction]
+#[pyo3(signature = (
+    log_likelihood, n_parameters, *, n_live, n_replaced, seed = 0,
+    termination_tolerance = RunConfig::DEFAULT_TERMINATION_TOLERANCE, max_iterations = None,
+    proposal = "dpgmm", rejection_quantile = DpgmmProposalConfig::DEFAULT_REJECTION_QUANTILE,
+    n_sweeps = DpgmmConfig::DEFAULT_N_SWEEPS, run_directory = None,
+))]
+// The many arguments are keyword-only in Python, where they form the public
+// configuration surface of a run.
+#[allow(clippy::too_many_arguments)]
+fn run(
+    py: Python<'_>,
+    log_likelihood: Py<PyAny>,
+    n_parameters: usize,
+    n_live: u32,
+    n_replaced: u32,
+    seed: u64,
+    termination_tolerance: f64,
+    max_iterations: Option<u32>,
+    proposal: &str,
+    rejection_quantile: f64,
+    n_sweeps: u32,
+    run_directory: Option<PathBuf>,
+) -> PyResult<PyRunResult> {
+    let config = build_config((n_live, n_replaced), seed, termination_tolerance, max_iterations)?;
+    let fitter = ProposalChoice::parse(proposal, rejection_quantile, n_sweeps)?;
+    let store = run_directory
+        .map(|directory| CheckpointStore::create(directory, config))
+        .transpose();
+    let mut recorder = ReportRecorder::new(store.map_err(to_value_error)?);
+    let (estimator, first_exception) = PythonEstimator::new(log_likelihood, n_parameters);
+    let sampler = NestedSampler::new(config, estimator, fitter);
+
+    // Worker threads need the interpreter for every likelihood call, so this
+    // thread lets go of it while the run is in progress.
+    let outcome = py.detach(|| sampler.initialize().and_then(|state| sampler.run(state, &mut recorder)));
+    let raised = first_exception
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(exception) = raised {
+        return Err(exception);
+    }
+    let outcome = outcome.map_err(to_value_error)?;
+    let stop_reason = outcome.stop_reason();
+    Ok(PyRunResult::new(
+        outcome.into_state(),
+        recorder.into_reports(),
+        stop_reason,
+    ))
+}
+
+/// Likelihood-free nested sampling.
+#[pymodule]
+fn lfns(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<PyRunResult>()?;
+    module.add_function(wrap_pyfunction!(run, module)?)?;
+    Ok(())
+}

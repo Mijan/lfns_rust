@@ -164,6 +164,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lfns-py"
+version = "0.1.0"
+dependencies = [
+ "dpgmm",
+ "lfns",
+ "numpy",
+ "pyo3",
+ "rand",
+ "thiserror",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"

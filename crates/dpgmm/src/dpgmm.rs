@@ -17,7 +17,7 @@ pub struct DpgmmConfig {
 
 impl DpgmmConfig {
     /// Default number of Gibbs sweeps.
-    pub const DEFAULT_N_SWEEPS: u32 = 50;
+    pub const DEFAULT_N_SWEEPS: u32 = 200;
 
     /// Creates a configuration that runs `n_sweeps` Gibbs sweeps.
     ///

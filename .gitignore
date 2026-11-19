@@ -11,3 +11,8 @@ flamegraph.svg
 
 # OS
 .DS_Store
+
+# Python environment of the notebooks
+.venv/
+__pycache__/
+.ipynb_checkpoints/
