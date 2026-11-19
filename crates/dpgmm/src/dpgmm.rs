@@ -99,8 +99,7 @@ impl Dpgmm {
             step: "assembling the fitted mixture",
         };
         let restored = weights.iter().zip(components).map(|(weight, component)| {
-            let factor = &component.precision.inverse_factor;
-            let covariance = whitening.restore_covariance(&(factor * factor.transpose()));
+            let covariance = whitening.restore_covariance(&component.precision.inverse()?);
             let mean = whitening.restore_mean(&component.mean);
             GaussianComponent::from_moments(*weight, &mean, &covariance).map_err(|_| STEP)
         });

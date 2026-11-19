@@ -14,6 +14,7 @@
 mod component_statistics;
 mod dpgmm;
 mod dpgmm_error;
+mod gamma_ratio_table;
 mod gaussian_mixture;
 mod gibbs_state;
 mod hyperparameters;
