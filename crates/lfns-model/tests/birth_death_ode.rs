@@ -12,10 +12,10 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn load_likelihood() -> Result<PetabLikelihood, lfns_model::ModelError> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/birth_death_ode/problem.yaml");
-    Ok(PetabLikelihood::new(
+    PetabLikelihood::new(
         PetabProblem::load(path)?,
         LikelihoodMethod::Deterministic(OdeSettings::default()),
-    ))
+    )
 }
 
 /// Log-likelihood from `m(t) = k/g (1 - exp(-g t))` and normal noise.

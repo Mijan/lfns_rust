@@ -49,4 +49,13 @@ pub enum SimulationFailure {
         /// The solver's own description of the failure.
         message: String,
     },
+
+    /// A stochastic simulation was requested for a model that is not a pure
+    /// reaction network.
+    #[error(
+        "the model has rate rules, assignment rules, or events, so it cannot be simulated as a \
+         stochastic jump process. Simulate it deterministically, or express the model as \
+         reactions only."
+    )]
+    NotAReactionNetwork,
 }

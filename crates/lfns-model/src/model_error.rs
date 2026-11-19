@@ -46,8 +46,9 @@ pub enum ModelError {
 
     /// The model uses a part of SBML that is not implemented.
     #[error(
-        "the SBML model uses {feature}, which is not supported yet. Supported are compartments, \
-         species, parameters, and reactions with kinetic laws; rewrite the model without {feature}."
+        "the SBML model uses {feature}, which is not supported. Supported are compartments, \
+         species, parameters, reactions with kinetic laws, rate rules on species, assignment \
+         rules on parameters, and events that assign parameters at a fixed time."
     )]
     UnsupportedSbml {
         /// The unsupported construct.

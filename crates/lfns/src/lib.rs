@@ -40,6 +40,7 @@ mod run_config;
 mod run_recorder;
 mod run_state;
 mod shrinkage_moments;
+mod standard_normal;
 
 pub use checkpoint_store::CheckpointStore;
 pub use dpgmm_proposal::{DpgmmProposal, DpgmmProposalConfig, DpgmmProposalError, DpgmmProposalFitter};

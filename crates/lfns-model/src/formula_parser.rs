@@ -108,11 +108,19 @@ impl<'a> FormulaParser<'a> {
             ("log10", 1) => UnaryFunction::Log10,
             ("sqrt", 1) => UnaryFunction::Sqrt,
             ("abs", 1) => UnaryFunction::Abs,
-            ("pow", 2) => {
-                let exponent = arguments.remove(1);
-                return Ok(Expression::binary(BinaryOperator::Power, arguments.remove(0), exponent));
+            ("pow" | "max" | "min", 2) => {
+                let operator = match name {
+                    "pow" => BinaryOperator::Power,
+                    "max" => BinaryOperator::Max,
+                    _ => BinaryOperator::Min,
+                };
+                let second = arguments.remove(1);
+                return Ok(Expression::binary(operator, arguments.remove(0), second));
             }
-            _ => return Err(self.error("unknown function; use exp, log, log10, sqrt, abs, or pow(base, exponent)")),
+            _ => {
+                let known = "use exp, log, log10, sqrt, abs, pow(base, exponent), max(a, b), or min(a, b)";
+                return Err(self.error(&format!("unknown function; {known}")));
+            }
         };
         Ok(Expression::unary(function, arguments.remove(0)))
     }
@@ -219,6 +227,7 @@ mod tests {
         assert!((evaluate("sqrt(x * x + y * y)")? - 5.0).abs() < 1e-12);
         assert!((evaluate("log(exp(y))")? - 4.0).abs() < 1e-12);
         assert!((evaluate("pow(x, 2) + log10(100)")? - 11.0).abs() < 1e-12);
+        assert!((evaluate("max(x, y) - min(x, y)")? - 1.0).abs() < 1e-12);
         Ok(())
     }
 

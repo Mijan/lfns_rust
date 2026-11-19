@@ -4,6 +4,7 @@ use lfns::LikelihoodEstimator;
 use rand::Rng;
 
 use crate::deterministic_simulator::{DeterministicSimulator, OdeSettings};
+use crate::model_error::ModelError;
 use crate::particle_filter::ParticleFilter;
 use crate::petab_problem::PetabProblem;
 use crate::simulation_failure::SimulationFailure;
@@ -32,9 +33,19 @@ pub struct PetabLikelihood {
 
 impl PetabLikelihood {
     /// Creates the likelihood of `problem`, obtained with `method`.
-    #[must_use]
-    pub fn new(problem: PetabProblem, method: LikelihoodMethod) -> Self {
-        Self { problem, method }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::UnsupportedSbml`] if a particle filter is
+    /// requested for a model with rules or events, which cannot be
+    /// simulated as a jump process.
+    pub fn new(problem: PetabProblem, method: LikelihoodMethod) -> Result<Self, ModelError> {
+        let is_stochastic = matches!(method, LikelihoodMethod::ParticleFilter(_));
+        if is_stochastic && !problem.model().is_pure_reaction_network() {
+            let feature = "stochastic simulation of a model with rate rules, assignment rules, or events".to_owned();
+            return Err(ModelError::UnsupportedSbml { feature });
+        }
+        Ok(Self { problem, method })
     }
 
     /// The problem whose likelihood this is.
@@ -55,14 +66,16 @@ impl PetabLikelihood {
         parameters: &[f64],
         rng: &mut R,
     ) -> Result<f64, SimulationFailure> {
+        let model = self.problem.model();
         let mut log_likelihood = 0.0;
         for trajectory in self.problem.trajectories() {
+            let initial_values = self.problem.initial_values(parameters, trajectory.condition_index());
             log_likelihood += match self.method {
                 LikelihoodMethod::ParticleFilter(filter) => {
-                    filter.estimate_log_likelihood(self.problem.model(), parameters, trajectory, rng)?
+                    filter.estimate_log_likelihood(model, &initial_values, trajectory, rng)?
                 }
                 LikelihoodMethod::Deterministic(settings) => {
-                    self.deterministic_log_likelihood(parameters, trajectory, settings)?
+                    self.deterministic_log_likelihood(&initial_values, trajectory, settings)?
                 }
             };
         }
@@ -73,25 +86,19 @@ impl PetabLikelihood {
     /// the log-densities of its readings.
     fn deterministic_log_likelihood(
         &self,
-        parameters: &[f64],
+        initial_values: &[f64],
         trajectory: &Trajectory,
         settings: OdeSettings,
     ) -> Result<f64, SimulationFailure> {
         let model = self.problem.model();
         let times: Vec<f64> = trajectory.time_points().iter().map(|(time, _)| *time).collect();
-        let states = DeterministicSimulator::new(model, settings).solve(parameters, &times)?;
-        let (mut values, mut stack) = (vec![0.0; model.value_width()], Vec::new());
-        model.write_initial_values(parameters, &mut values);
+        let buffers = DeterministicSimulator::new(model, settings).solve(initial_values, &times)?;
+        let mut stack = Vec::new();
         let mut log_likelihood = 0.0;
-        for (state, (_, readings)) in states.iter().zip(trajectory.time_points()) {
-            values[..state.len()].copy_from_slice(state);
+        for (values, (_, readings)) in buffers.iter().zip(trajectory.time_points()) {
             for reading in readings {
-                log_likelihood += model.log_observation_density(
-                    reading.observable_index,
-                    reading.measurement,
-                    &values,
-                    &mut stack,
-                )?;
+                log_likelihood +=
+                    model.log_observation_density(reading.observable_index, reading.measurement, values, &mut stack)?;
             }
         }
         Ok(log_likelihood)

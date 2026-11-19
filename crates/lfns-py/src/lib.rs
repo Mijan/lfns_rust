@@ -18,14 +18,14 @@ mod run_settings;
 use std::path::PathBuf;
 
 use ::dpgmm::DpgmmConfig;
-use ::lfns::{DpgmmProposalConfig, NestedSampler, RunConfig};
+use ::lfns::{DpgmmProposalConfig, RunConfig};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::petab_binding::PyPetabProblem;
 use crate::python_estimator::PythonEstimator;
 use crate::run_result::PyRunResult;
-use crate::run_settings::RunSettings;
+use crate::run_settings::{Checkpointing, RunSettings};
 
 /// Turns a Rust error into a Python `ValueError` carrying its message.
 pub(crate) fn to_value_error(error: impl std::fmt::Display) -> PyErr {
@@ -42,17 +42,19 @@ pub(crate) fn to_value_error(error: impl std::fmt::Display) -> PyErr {
 ///
 /// `proposal` is `"dpgmm"` (uniform over the support of a DP-GMM fit to the
 /// live points) or `"prior"` (the whole unit cube). With `run_directory` the
-/// run is checkpointed there after every iteration.
+/// run is checkpointed there after every iteration, and `resume=True`
+/// continues the run stored there. `progress=True` prints one line per
+/// iteration.
 #[pyfunction]
 #[pyo3(signature = (
     log_likelihood, n_parameters, *, n_live, n_replaced, seed = 0,
     termination_tolerance = RunConfig::DEFAULT_TERMINATION_TOLERANCE, max_iterations = None,
     proposal = "dpgmm", rejection_quantile = DpgmmProposalConfig::DEFAULT_REJECTION_QUANTILE,
-    n_sweeps = DpgmmConfig::DEFAULT_N_SWEEPS, run_directory = None,
+    n_sweeps = DpgmmConfig::DEFAULT_N_SWEEPS, run_directory = None, resume = false, progress = false,
 ))]
 // The many arguments are keyword-only in Python, where they form the public
 // configuration surface of a run.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn run(
     py: Python<'_>,
     log_likelihood: Py<PyAny>,
@@ -66,31 +68,26 @@ fn run(
     rejection_quantile: f64,
     n_sweeps: u32,
     run_directory: Option<PathBuf>,
+    resume: bool,
+    progress: bool,
 ) -> PyResult<PyRunResult> {
     let settings = RunSettings::new((n_live, n_replaced), seed, termination_tolerance, max_iterations)?
         .with_proposal(proposal, rejection_quantile, n_sweeps)?
-        .with_run_directory(run_directory)?;
-    let (config, fitter, mut recorder) = settings.into_parts();
+        .with_checkpointing(Checkpointing {
+            run_directory,
+            resume,
+            progress,
+        })?;
     let (estimator, first_exception) = PythonEstimator::new(log_likelihood, n_parameters);
-    let sampler = NestedSampler::new(config, estimator, fitter);
-
-    // Worker threads need the interpreter for every likelihood call, so this
-    // thread lets go of it while the run is in progress.
-    let outcome = py.detach(|| sampler.initialize().and_then(|state| sampler.run(state, &mut recorder)));
+    let outcome = settings.run_sampler(py, estimator);
     let raised = first_exception
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .take();
-    if let Some(exception) = raised {
-        return Err(exception);
+    match raised {
+        Some(exception) => Err(exception),
+        None => outcome,
     }
-    let outcome = outcome.map_err(to_value_error)?;
-    let stop_reason = outcome.stop_reason();
-    Ok(PyRunResult::new(
-        outcome.into_state(),
-        recorder.into_reports(),
-        stop_reason,
-    ))
 }
 
 /// Likelihood-free nested sampling.

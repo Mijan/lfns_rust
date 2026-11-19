@@ -23,6 +23,14 @@ impl MathmlReader {
             "ci" => Ok(Expression::Symbol(Self::text_of(element)?.to_owned())),
             "cn" => Self::read_number(element),
             "apply" => Self::read_apply(element),
+            "csymbol"
+                if element
+                    .attribute("definitionURL")
+                    .is_some_and(|url| url.ends_with("/time")) =>
+            {
+                Ok(Expression::Symbol(Expression::TIME.to_owned()))
+            }
+            "piecewise" => Self::read_piecewise(element),
             other => Err(ModelError::UnsupportedSbml {
                 feature: format!("the MathML element <{other}>"),
             }),
@@ -63,11 +71,38 @@ impl MathmlReader {
             ("minus", 2) => Ok(Self::fold(BinaryOperator::Subtract, arguments)),
             ("divide", 2) => Ok(Self::fold(BinaryOperator::Divide, arguments)),
             ("power", 2) => Ok(Self::fold(BinaryOperator::Power, arguments)),
+            ("max", 1..) => Ok(Self::fold(BinaryOperator::Max, arguments)),
+            ("min", 1..) => Ok(Self::fold(BinaryOperator::Min, arguments)),
+            ("gt", 2) => Ok(Self::fold(BinaryOperator::Greater, arguments)),
+            ("geq", 2) => Ok(Self::fold(BinaryOperator::GreaterEqual, arguments)),
+            ("lt", 2) => Ok(Self::fold(BinaryOperator::Less, arguments)),
+            ("leq", 2) => Ok(Self::fold(BinaryOperator::LessEqual, arguments)),
             (_, 1) => Self::read_unary(name, arguments),
             _ => Err(ModelError::UnsupportedSbml {
                 feature: format!("the MathML operator <{name}> with {} arguments", arguments.len()),
             }),
         }
+    }
+
+    /// Reads `<piecewise>`: pieces of `(value, condition)` tried in order,
+    /// then the `<otherwise>` value.
+    fn read_piecewise(piecewise: Node) -> Result<Expression, ModelError> {
+        let mut pieces = Vec::new();
+        let mut otherwise = None;
+        for child in Self::element_children(piecewise) {
+            let mut parts = Self::element_children(child).map(Self::read_element);
+            match (child.tag_name().name(), parts.next(), parts.next()) {
+                ("piece", Some(value), Some(condition)) => pieces.push((value?, condition?)),
+                ("otherwise", Some(value), None) => otherwise = Some(value?),
+                _ => return Err(Self::invalid("a malformed <piecewise> element")),
+            }
+        }
+        let fallback = otherwise.ok_or_else(|| ModelError::UnsupportedSbml {
+            feature: "a <piecewise> without <otherwise>".to_owned(),
+        })?;
+        Ok(pieces.into_iter().rev().fold(fallback, |rest, (value, condition)| {
+            Expression::conditional(condition, value, rest)
+        }))
     }
 
     fn read_unary(name: &str, mut arguments: Vec<Expression>) -> Result<Expression, ModelError> {

@@ -1,18 +1,31 @@
-//! Proposals drawn uniformly from the support of a DP-GMM density estimate.
+//! Proposals drawn from the prior over the support of a DP-GMM density
+//! estimate.
 //!
 //! The live particles of an iteration are distributed like the constrained
-//! prior, whose boundary is smooth when the likelihood is estimated with
-//! noise. A Dirichlet process Gaussian mixture is fitted to them, and
-//! candidates are drawn **uniformly** from the region where the fitted
-//! density exceeds a floor: a draw `x` from the mixture is kept with
-//! probability `floor / density(x)`, and discarded outright where the
-//! density is below the floor or `x` lies outside the unit cube.
+//! prior. To propose from the prior over the region they occupy, the
+//! particles are first mapped from the unit cube to an unbounded *latent*
+//! space, coordinate by coordinate, with the standard normal quantile
+//! function. There the prior is a standard normal density `phi` and no
+//! coordinate has an edge that a Gaussian could leak across, which matters
+//! in many dimensions: a Gaussian fitted to points that fill a
+//! 69-dimensional cube has almost all of its mass outside the cube.
+//!
+//! A Dirichlet process Gaussian mixture `m` is fitted to the latent points.
+//! The proposal region is where the ratio `m / phi` (the density of the
+//! live particles relative to the prior) exceeds a floor, and a candidate is
+//! drawn from the prior restricted to that region by rejection: a draw `z`
+//! from the mixture is kept with probability `floor * phi(z) / m(z)`, and
+//! discarded outright where the ratio is below the floor. For a posterior
+//! region that is small compared with the prior, `phi` is nearly constant
+//! over it and this is a uniform draw over the support of the mixture, as
+//! in the paper.
 
 use dpgmm::{Dpgmm, DpgmmConfig, DpgmmError, GaussianMixture, Observations};
 use rand::{Rng, RngExt};
 
 use crate::point_matrix::PointMatrix;
 use crate::proposal::{Proposal, ProposalFitter};
+use crate::standard_normal::StandardNormal;
 
 /// Why a DP-GMM proposal could not be built.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -30,19 +43,6 @@ pub enum DpgmmProposalError {
     /// The mixture could not be fitted to the live particles.
     #[error("fitting the mixture to the live particles failed: {0}")]
     Fit(#[from] DpgmmError),
-
-    /// Almost all of the fitted density lies outside the unit cube.
-    #[error(
-        "only {n_inside} of {n_draws} draws from the fitted mixture fell inside the unit cube, \
-         too few to locate the density floor. The live particles are probably piled up at a \
-         prior bound; widen that bound."
-    )]
-    MixtureOutsideUnitCube {
-        /// Draws that fell inside the cube.
-        n_inside: usize,
-        /// Draws attempted.
-        n_draws: usize,
-    },
 }
 
 /// Settings of the DP-GMM proposal.
@@ -53,12 +53,11 @@ pub struct DpgmmProposalConfig {
 }
 
 impl DpgmmProposalConfig {
-    /// Default fraction of the mixture's own draws whose density lies below
-    /// the floor.
+    /// Default fraction of the mixture's own draws that lie below the floor.
     pub const DEFAULT_REJECTION_QUANTILE: f64 = 0.001;
 
-    /// Returns a copy that places the density floor at the given quantile
-    /// of the density of the mixture's own draws. A smaller quantile covers
+    /// Returns a copy that places the floor at the given quantile of the
+    /// density ratio over the mixture's own draws. A smaller quantile covers
     /// more of the tails at the price of a lower acceptance rate.
     ///
     /// # Errors
@@ -81,7 +80,7 @@ impl DpgmmProposalConfig {
         Self { mixture, ..self }
     }
 
-    /// Quantile at which the density floor is placed.
+    /// Quantile at which the floor is placed.
     #[must_use]
     pub fn rejection_quantile(&self) -> f64 {
         self.rejection_quantile
@@ -103,48 +102,49 @@ impl Default for DpgmmProposalConfig {
     }
 }
 
-/// Uniform proposal over the part of the unit cube where a fitted mixture
-/// density exceeds a floor.
+/// The prior restricted to the region where a fitted mixture density,
+/// relative to the prior, exceeds a floor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DpgmmProposal {
-    mixture: GaussianMixture,
-    log_density_floor: f64,
+    latent_mixture: GaussianMixture,
+    log_ratio_floor: f64,
 }
 
 impl DpgmmProposal {
-    /// The fitted mixture.
+    /// The mixture fitted to the live particles in latent space, where each
+    /// unit-cube coordinate is mapped through the standard normal quantile
+    /// function.
     #[must_use]
-    pub fn mixture(&self) -> &GaussianMixture {
-        &self.mixture
+    pub fn latent_mixture(&self) -> &GaussianMixture {
+        &self.latent_mixture
     }
 
-    /// Logarithm of the density floor that bounds the proposal region.
+    /// Logarithm of the floor on the mixture density relative to the prior
+    /// that bounds the proposal region.
     #[must_use]
-    pub fn log_density_floor(&self) -> f64 {
-        self.log_density_floor
+    pub fn log_ratio_floor(&self) -> f64 {
+        self.log_ratio_floor
     }
 
-    /// Draws from the mixture until a point lies inside the unit cube;
-    /// returns its log-density.
-    fn sample_inside_cube<R: Rng + ?Sized>(mixture: &GaussianMixture, rng: &mut R, unit_point: &mut [f64]) -> f64 {
-        let unit_interval = 0.0..=1.0;
-        loop {
-            mixture.sample(rng, unit_point);
-            if unit_point.iter().all(|coordinate| unit_interval.contains(coordinate)) {
-                return mixture.log_density(unit_point);
-            }
-        }
+    /// `ln` of the mixture density over the prior density at a latent point.
+    fn log_ratio(mixture: &GaussianMixture, latent_point: &[f64]) -> f64 {
+        let log_prior: f64 = latent_point.iter().map(|z| StandardNormal::log_density(*z)).sum();
+        mixture.log_density(latent_point) - log_prior
     }
 }
 
 impl Proposal for DpgmmProposal {
     fn propose<R: Rng + ?Sized>(&self, rng: &mut R, unit_point: &mut [f64]) {
         loop {
-            let log_density = Self::sample_inside_cube(&self.mixture, rng, unit_point);
-            let keep_probability = (self.log_density_floor - log_density).exp();
-            if log_density >= self.log_density_floor && rng.random::<f64>() < keep_probability {
-                return;
+            self.latent_mixture.sample(rng, unit_point);
+            let log_ratio = Self::log_ratio(&self.latent_mixture, unit_point);
+            let keep_probability = (self.log_ratio_floor - log_ratio).exp();
+            if log_ratio >= self.log_ratio_floor && rng.random::<f64>() < keep_probability {
+                break;
             }
+        }
+        for coordinate in unit_point.iter_mut() {
+            *coordinate = StandardNormal::cdf(*coordinate);
         }
     }
 }
@@ -156,11 +156,8 @@ pub struct DpgmmProposalFitter {
 }
 
 impl DpgmmProposalFitter {
-    /// Number of in-cube mixture draws from which the floor is estimated.
+    /// Number of mixture draws from which the floor is estimated.
     const N_QUANTILE_DRAWS: usize = 1000;
-    /// Mixture draws attempted before giving up on finding enough of them
-    /// inside the unit cube.
-    const MAX_QUANTILE_ATTEMPTS: usize = 1_000_000;
 
     /// Creates a fitter with the given settings.
     #[must_use]
@@ -168,32 +165,16 @@ impl DpgmmProposalFitter {
         Self { config }
     }
 
-    /// Estimates the floor as a low quantile of the log-density of the
-    /// mixture's own draws that fall inside the unit cube.
-    fn estimate_log_density_floor<R: Rng + ?Sized>(
-        &self,
-        mixture: &GaussianMixture,
-        rng: &mut R,
-    ) -> Result<f64, DpgmmProposalError> {
-        let unit_interval = 0.0..=1.0;
+    /// Estimates the floor as a low quantile of the density ratio over the
+    /// mixture's own draws.
+    fn estimate_log_ratio_floor<R: Rng + ?Sized>(&self, mixture: &GaussianMixture, rng: &mut R) -> f64 {
         let mut point = vec![0.0; mixture.n_dimensions()];
-        let mut log_densities = Vec::with_capacity(Self::N_QUANTILE_DRAWS);
-        for _ in 0..Self::MAX_QUANTILE_ATTEMPTS {
-            mixture.sample(rng, &mut point);
-            if point.iter().all(|coordinate| unit_interval.contains(coordinate)) {
-                log_densities.push(mixture.log_density(&point));
-            }
-            if log_densities.len() == Self::N_QUANTILE_DRAWS {
-                return Ok(self.select_quantile(&mut log_densities));
-            }
-        }
-        Err(DpgmmProposalError::MixtureOutsideUnitCube {
-            n_inside: log_densities.len(),
-            n_draws: Self::MAX_QUANTILE_ATTEMPTS,
-        })
-    }
-
-    fn select_quantile(&self, log_densities: &mut [f64]) -> f64 {
+        let mut log_ratios: Vec<f64> = (0..Self::N_QUANTILE_DRAWS)
+            .map(|_| {
+                mixture.sample(rng, &mut point);
+                DpgmmProposal::log_ratio(mixture, &point)
+            })
+            .collect();
         // The product lies in [0, len), so the conversion neither truncates
         // meaningfully nor loses a sign.
         #[allow(
@@ -201,8 +182,8 @@ impl DpgmmProposalFitter {
             clippy::cast_sign_loss,
             clippy::cast_precision_loss
         )]
-        let rank = (self.config.rejection_quantile * log_densities.len() as f64) as usize;
-        *log_densities.select_nth_unstable_by(rank, f64::total_cmp).1
+        let rank = (self.config.rejection_quantile * log_ratios.len() as f64) as usize;
+        *log_ratios.select_nth_unstable_by(rank, f64::total_cmp).1
     }
 }
 
@@ -215,12 +196,17 @@ impl ProposalFitter for DpgmmProposalFitter {
         live_points: &PointMatrix,
         rng: &mut R,
     ) -> Result<DpgmmProposal, DpgmmProposalError> {
-        let observations = Observations::from_rows(live_points.as_flat_slice(), live_points.n_dimensions())?;
-        let mixture = Dpgmm::new(self.config.mixture).fit(&observations, rng)?;
-        let log_density_floor = self.estimate_log_density_floor(&mixture, rng)?;
+        let latent: Vec<f64> = live_points
+            .as_flat_slice()
+            .iter()
+            .map(|u| StandardNormal::quantile(*u))
+            .collect();
+        let observations = Observations::from_rows(&latent, live_points.n_dimensions())?;
+        let latent_mixture = Dpgmm::new(self.config.mixture).fit(&observations, rng)?;
+        let log_ratio_floor = self.estimate_log_ratio_floor(&latent_mixture, rng);
         Ok(DpgmmProposal {
-            mixture,
-            log_density_floor,
+            latent_mixture,
+            log_ratio_floor,
         })
     }
 }

@@ -135,6 +135,15 @@ impl ParameterSpace {
         &self.estimated
     }
 
+    /// Nominal values of the estimated parameters.
+    #[must_use]
+    pub fn estimated_nominal_values(&self) -> Vec<f64> {
+        self.estimated
+            .iter()
+            .map(|parameter| self.nominal_values[parameter.index])
+            .collect()
+    }
+
     /// Values of the estimated parameters at `unit_point`.
     #[must_use]
     pub fn estimated_values(&self, unit_point: &[f64]) -> Vec<f64> {

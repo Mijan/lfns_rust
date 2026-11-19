@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 dpgmm = { version = "0.1.0", path = "../dpgmm" }
+libm = "0.2.16"
 rand = "0.10.4"
 rand_chacha = "0.10.0"
 rayon = "1.12.0"

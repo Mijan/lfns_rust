@@ -1,7 +1,8 @@
 //! Loading a parameter estimation problem in PEtab format (version 1).
 //!
 //! Supported subset: one SBML model; one or more measurement, observable,
-//! and condition tables; normally distributed measurement noise;
+//! and condition tables; conditions that set initial species values and
+//! parameters to numbers; normally distributed measurement noise;
 //! parameters on a linear or logarithmic scale with the default prior
 //! (uniform on the parameter scale between the bounds). Measurements are
 //! grouped into trajectories by simulation condition and `replicateId`.
@@ -10,10 +11,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use rand::Rng;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::deterministic_simulator::{DeterministicSimulator, OdeSettings};
+use crate::experimental_condition::ExperimentalCondition;
 use crate::formula_parser::FormulaParser;
 use crate::model_error::ModelError;
 use crate::parameter_space::{EstimatedParameter, ParameterScale, ParameterSpace};
@@ -85,22 +88,23 @@ struct MeasurementRow {
     noise_parameters: String,
 }
 
-/// One simulated trajectory: per requested time, the species amounts and a
-/// noisy measurement of every observable.
+/// One simulated trajectory: per requested time, the species readings and
+/// the observables.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SimulatedTrajectory {
     /// Species amounts at each time, in the order of the model species.
     pub species_amounts: Vec<Vec<f64>>,
-    /// One simulated measurement per observable at each time.
+    /// One value per observable at each time.
     pub observations: Vec<Vec<f64>>,
 }
 
 /// A parameter estimation problem: a model, its parameters with their
-/// priors, and the measured trajectories.
+/// priors, the experimental conditions, and the measured trajectories.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PetabProblem {
     model: SimulationModel,
     parameter_space: ParameterSpace,
+    conditions: Vec<ExperimentalCondition>,
     trajectories: Vec<Trajectory>,
     species_ids: Vec<String>,
     observable_ids: Vec<String>,
@@ -110,6 +114,8 @@ impl PetabProblem {
     const DEFAULT_PRIOR: &'static str = "parameterScaleUniform";
     const NORMAL_NOISE: &'static str = "normal";
     const NO_TRANSFORMATION: &'static str = "lin";
+    const CONDITION_ID_COLUMN: &'static str = "conditionId";
+    const CONDITION_NAME_COLUMN: &'static str = "conditionName";
 
     /// Loads the problem described by the PEtab YAML file at `yaml_path`.
     ///
@@ -123,22 +129,24 @@ impl PetabProblem {
         let file: ProblemFile = serde_yaml_ng::from_str(&read_text(yaml_path)?).map_err(|e| invalid(yaml_path, &e))?;
         let entry = Self::single_problem(yaml_path, &file)?;
         let mut network = ReactionNetwork::from_sbml(&read_text(&directory.join(&entry.sbml_files[0]))?)?;
-        let parameter_rows: Vec<ParameterRow> = read_table(&directory.join(&file.parameter_file))?;
+        let parameter_path = directory.join(&file.parameter_file);
+        let parameter_rows: Vec<ParameterRow> = read_table(&parameter_path)?;
         for row in &parameter_rows {
             network.set_parameter(&row.parameter_id, row.nominal_value);
         }
         let observable_rows: Vec<ObservableRow> = read_tables(directory, &entry.observable_files)?;
         let measurement_rows: Vec<MeasurementRow> = read_tables(directory, &entry.measurement_files)?;
-        Self::check_conditions(directory, &entry.condition_files)?;
-        let observables = Self::read_observables(&observable_rows)?;
+        let observables = observable_rows
+            .iter()
+            .map(Self::read_observable)
+            .collect::<Result<Vec<_>, _>>()?;
+        let parameter_space = Self::read_parameter_space(&network, &parameter_rows, &parameter_path)?;
+        let conditions = Self::read_conditions(&network, &parameter_space, directory, &entry.condition_files)?;
         Ok(Self {
             model: SimulationModel::new(&network, &observables)?,
-            parameter_space: Self::read_parameter_space(
-                &network,
-                &parameter_rows,
-                &directory.join(&file.parameter_file),
-            )?,
-            trajectories: Self::read_trajectories(&measurement_rows, &observables, directory)?,
+            trajectories: Self::read_trajectories(&measurement_rows, &observables, &conditions, directory)?,
+            parameter_space,
+            conditions,
             species_ids: network.species().iter().map(|species| species.id.clone()).collect(),
             observable_ids: observables.into_iter().map(|observable| observable.id).collect(),
         })
@@ -154,6 +162,12 @@ impl PetabProblem {
     #[must_use]
     pub fn parameter_space(&self) -> &ParameterSpace {
         &self.parameter_space
+    }
+
+    /// The experimental conditions.
+    #[must_use]
+    pub fn conditions(&self) -> &[ExperimentalCondition] {
+        &self.conditions
     }
 
     /// The measured trajectories.
@@ -174,22 +188,37 @@ impl PetabProblem {
         &self.observable_ids
     }
 
-    /// Simulates the model stochastically with the given values of all
-    /// model parameters and records it at `times` (increasing, from 0).
+    /// The value buffer at time zero for the given values of all model
+    /// parameters under the condition at `condition_index`.
+    #[must_use]
+    pub fn initial_values(&self, parameters: &[f64], condition_index: usize) -> Vec<f64> {
+        let mut values = vec![0.0; self.model.value_width()];
+        self.model.write_initial_values(parameters, &mut values);
+        self.conditions[condition_index].apply_to(&mut values);
+        values
+    }
+
+    /// Simulates the model stochastically and records it at `times`
+    /// (increasing, from 0); the observables carry measurement noise.
     ///
     /// # Errors
     ///
-    /// Returns a [`SimulationFailure`] if the model cannot be simulated.
-    pub fn simulate<R: rand::Rng + ?Sized>(
+    /// Returns [`SimulationFailure::NotAReactionNetwork`] if the model has
+    /// rules or events, and another [`SimulationFailure`] if it cannot be
+    /// simulated.
+    pub fn simulate<R: Rng + ?Sized>(
         &self,
         parameters: &[f64],
+        condition_index: usize,
         times: &[f64],
         rng: &mut R,
     ) -> Result<SimulatedTrajectory, SimulationFailure> {
+        if !self.model.is_pure_reaction_network() {
+            return Err(SimulationFailure::NotAReactionNetwork);
+        }
         let simulator = StochasticSimulator::new(&self.model);
         let mut scratch = SimulationScratch::default();
-        let mut values = vec![0.0; self.model.value_width()];
-        self.model.write_initial_values(parameters, &mut values);
+        let mut values = self.initial_values(parameters, condition_index);
         let mut trajectory = SimulatedTrajectory {
             species_amounts: Vec::new(),
             observations: Vec::new(),
@@ -209,10 +238,9 @@ impl PetabProblem {
         Ok(trajectory)
     }
 
-    /// Integrates the model as an ODE with the given values of all model
-    /// parameters and records it at `times` (increasing, from 0). The
-    /// observations are the expected values of the observables, without
-    /// measurement noise.
+    /// Integrates the model as an ODE and records it at `times`
+    /// (increasing, from 0). The observables are their expected values,
+    /// without measurement noise.
     ///
     /// # Errors
     ///
@@ -220,22 +248,27 @@ impl PetabProblem {
     pub fn simulate_deterministic(
         &self,
         parameters: &[f64],
+        condition_index: usize,
         times: &[f64],
         settings: OdeSettings,
     ) -> Result<SimulatedTrajectory, SimulationFailure> {
-        let species_amounts = DeterministicSimulator::new(&self.model, settings).solve(parameters, times)?;
-        let (mut values, mut stack) = (vec![0.0; self.model.value_width()], Vec::new());
-        self.model.write_initial_values(parameters, &mut values);
-        let mut observations = Vec::with_capacity(times.len());
-        for state in &species_amounts {
-            values[..state.len()].copy_from_slice(state);
-            let mean = |index| self.model.observation_mean(index, &values, &mut stack);
-            observations.push((0..self.model.n_observables()).map(mean).collect());
+        let initial_values = self.initial_values(parameters, condition_index);
+        let buffers = DeterministicSimulator::new(&self.model, settings).solve(&initial_values, times)?;
+        let mut stack = Vec::new();
+        let mut trajectory = SimulatedTrajectory {
+            species_amounts: Vec::new(),
+            observations: Vec::new(),
+        };
+        for values in &buffers {
+            let mean = |index| self.model.observation_mean(index, values, &mut stack);
+            trajectory
+                .observations
+                .push((0..self.model.n_observables()).map(mean).collect());
+            trajectory
+                .species_amounts
+                .push(values[..self.model.n_species()].to_vec());
         }
-        Ok(SimulatedTrajectory {
-            species_amounts,
-            observations,
-        })
+        Ok(trajectory)
     }
 
     fn single_problem<'a>(yaml_path: &Path, file: &'a ProblemFile) -> Result<&'a ProblemEntry, ModelError> {
@@ -254,25 +287,87 @@ impl PetabProblem {
         }
     }
 
-    /// Rejects condition tables that override model quantities.
-    fn check_conditions(directory: &Path, files: &[PathBuf]) -> Result<(), ModelError> {
+    /// Reads the condition tables: one condition per row, every further
+    /// column naming a species (initial value) or a parameter it sets.
+    fn read_conditions(
+        network: &ReactionNetwork,
+        parameter_space: &ParameterSpace,
+        directory: &Path,
+        files: &[PathBuf],
+    ) -> Result<Vec<ExperimentalCondition>, ModelError> {
+        let mut conditions = Vec::new();
         for file in files {
             let path = directory.join(file);
             let text = read_text(&path)?;
-            let header = text.lines().next().unwrap_or_default();
-            if header
-                .split('\t')
-                .any(|column| !matches!(column.trim(), "conditionId" | "conditionName"))
-            {
-                let remedy = "Keep only the conditionId and conditionName columns and encode the values in the model.";
-                return Err(unsupported("condition-specific overrides of model quantities", remedy));
+            let mut reader = csv::ReaderBuilder::new().delimiter(b'\t').from_reader(text.as_bytes());
+            let headers = reader.headers().map_err(|error| invalid(&path, &error))?.clone();
+            for record in reader.records() {
+                let record = record.map_err(|error| invalid(&path, &error))?;
+                let cells = headers.iter().zip(record.iter());
+                conditions.push(Self::read_condition(network, parameter_space, cells, &path)?);
             }
         }
-        Ok(())
+        Ok(conditions)
     }
 
-    fn read_observables(rows: &[ObservableRow]) -> Result<Vec<ObservableDefinition>, ModelError> {
-        rows.iter().map(Self::read_observable).collect()
+    fn read_condition<'a>(
+        network: &ReactionNetwork,
+        parameter_space: &ParameterSpace,
+        cells: impl Iterator<Item = (&'a str, &'a str)>,
+        path: &Path,
+    ) -> Result<ExperimentalCondition, ModelError> {
+        let (mut id, mut overrides) = ("", Vec::new());
+        for (column, cell) in cells {
+            match column {
+                Self::CONDITION_ID_COLUMN => id = cell,
+                Self::CONDITION_NAME_COLUMN => {}
+                _ if cell.trim().is_empty() => {}
+                target => {
+                    let value: f64 = cell.trim().parse().map_err(|_| {
+                        let feature = format!("the non-numeric value `{cell}` of `{target}` in the condition table");
+                        unsupported(
+                            &feature,
+                            "Write a number; parameter names as condition values are not supported.",
+                        )
+                    })?;
+                    if !value.is_nan() {
+                        overrides.push(Self::condition_override(network, parameter_space, target, value, path)?);
+                    }
+                }
+            }
+        }
+        Ok(ExperimentalCondition::new(id, overrides))
+    }
+
+    /// The value-buffer slot and value a condition column sets. A species
+    /// column gives the initial value in the units formulas read it in.
+    fn condition_override(
+        network: &ReactionNetwork,
+        parameter_space: &ParameterSpace,
+        target: &str,
+        value: f64,
+        path: &Path,
+    ) -> Result<(usize, f64), ModelError> {
+        if let Some(index) = network.species_index(target) {
+            return Ok((index, value * network.species()[index].amount_per_reading()));
+        }
+        let reason = |problem: &str| ModelError::Petab {
+            path: path.to_path_buf(),
+            reason: format!("the condition column `{target}` {problem}"),
+        };
+        let index = network
+            .parameter_index(target)
+            .ok_or_else(|| reason("names neither a species nor a parameter of the model"))?;
+        if parameter_space
+            .estimated()
+            .iter()
+            .any(|parameter| parameter.id() == target)
+        {
+            return Err(reason(
+                "sets an estimated parameter; set `estimate` to 0 for it or remove the column",
+            ));
+        }
+        Ok((network.species().len() + index, value))
     }
 
     fn read_observable(row: &ObservableRow) -> Result<ObservableDefinition, ModelError> {
@@ -329,23 +424,36 @@ impl PetabProblem {
     fn read_trajectories(
         rows: &[MeasurementRow],
         observables: &[ObservableDefinition],
+        conditions: &[ExperimentalCondition],
         directory: &Path,
     ) -> Result<Vec<Trajectory>, ModelError> {
-        let mut order: Vec<(&str, &str)> = Vec::new();
-        let mut readings: HashMap<(&str, &str), Vec<(f64, Reading)>> = HashMap::new();
+        let invalid_row = |reason: String| ModelError::Petab {
+            path: directory.to_path_buf(),
+            reason,
+        };
+        let mut order: Vec<(usize, &str)> = Vec::new();
+        let mut readings: HashMap<(usize, &str), Vec<(f64, Reading)>> = HashMap::new();
         for row in rows {
             Self::check_measurement(row)?;
             let observable_index = observables
                 .iter()
                 .position(|observable| observable.id == row.observable_id)
-                .ok_or_else(|| ModelError::Petab {
-                    path: directory.to_path_buf(),
-                    reason: format!(
+                .ok_or_else(|| {
+                    invalid_row(format!(
                         "a measurement refers to the undefined observable `{}`",
                         row.observable_id
-                    ),
+                    ))
                 })?;
-            let key = (row.simulation_condition_id.as_str(), row.replicate_id.as_str());
+            let condition_index = conditions
+                .iter()
+                .position(|condition| condition.id() == row.simulation_condition_id)
+                .ok_or_else(|| {
+                    invalid_row(format!(
+                        "a measurement refers to the undefined condition `{}`",
+                        row.simulation_condition_id
+                    ))
+                })?;
+            let key = (condition_index, row.replicate_id.as_str());
             if !readings.contains_key(&key) {
                 order.push(key);
             }
@@ -357,11 +465,13 @@ impl PetabProblem {
                 },
             ));
         }
-        Ok(order
-            .into_iter()
-            .filter_map(|key| readings.remove(&key))
-            .map(Trajectory::from_readings)
-            .collect())
+        let mut trajectories = Vec::with_capacity(order.len());
+        for key in order {
+            if let Some(group) = readings.remove(&key) {
+                trajectories.push(Trajectory::from_readings(key.0, group));
+            }
+        }
+        Ok(trajectories)
     }
 
     fn check_measurement(row: &MeasurementRow) -> Result<(), ModelError> {
@@ -382,6 +492,16 @@ impl PetabProblem {
             return Err(unsupported(
                 "measurements at negative or infinite times",
                 "Use finite times of at least 0.",
+            ));
+        }
+        if !row.measurement.is_finite() {
+            let feature = format!(
+                "the non-finite measurement of `{}` at time {}",
+                row.observable_id, row.time
+            );
+            return Err(unsupported(
+                &feature,
+                "Remove rows without a measured value from the measurement table.",
             ));
         }
         Ok(())

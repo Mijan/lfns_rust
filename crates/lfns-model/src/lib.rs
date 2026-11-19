@@ -18,6 +18,7 @@
 
 mod compiled_expression;
 mod deterministic_simulator;
+mod experimental_condition;
 mod expression;
 mod formula_parser;
 mod mathml_reader;
@@ -33,16 +34,17 @@ mod simulation_model;
 mod stochastic_simulator;
 mod trajectory;
 
-pub use compiled_expression::CompiledExpression;
+pub use compiled_expression::{CompiledExpression, Dual};
 pub use deterministic_simulator::{DeterministicSimulator, OdeSettings};
+pub use experimental_condition::ExperimentalCondition;
 pub use expression::{BinaryOperator, Expression, UnaryFunction};
 pub use model_error::ModelError;
 pub use parameter_space::{EstimatedParameter, ParameterScale, ParameterSpace};
 pub use particle_filter::ParticleFilter;
 pub use petab_likelihood::{LikelihoodMethod, PetabLikelihood};
 pub use petab_problem::{PetabProblem, SimulatedTrajectory};
-pub use reaction_network::{Quantity, Reaction, ReactionNetwork};
+pub use reaction_network::{AssignmentRule, Quantity, RateRule, Reaction, ReactionNetwork, Species, TimedAssignment};
 pub use simulation_failure::SimulationFailure;
-pub use simulation_model::{ObservableDefinition, SimulationModel};
+pub use simulation_model::{DualScratch, ObservableDefinition, SimulationModel};
 pub use stochastic_simulator::{SimulationScratch, StochasticSimulator};
 pub use trajectory::{Reading, Trajectory};

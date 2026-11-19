@@ -9,18 +9,20 @@ pub struct Reading {
     pub measurement: f64,
 }
 
-/// The measurements of one experimental unit (for example one cell) over
-/// time: strictly increasing time points, each with its readings.
+/// The measurements of one experimental unit (for example one cell or one
+/// bioreactor run) over time: strictly increasing time points, each with its readings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trajectory {
+    condition_index: usize,
     time_points: Vec<(f64, Vec<Reading>)>,
 }
 
 impl Trajectory {
-    /// Builds a trajectory from `(time, reading)` pairs in any order;
-    /// readings taken at the same time are grouped.
+    /// Builds the trajectory measured under the condition at
+    /// `condition_index` from `(time, reading)` pairs in any order; readings
+    /// taken at the same time are grouped.
     #[must_use]
-    pub fn from_readings(mut readings: Vec<(f64, Reading)>) -> Self {
+    pub fn from_readings(condition_index: usize, mut readings: Vec<(f64, Reading)>) -> Self {
         readings.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut time_points: Vec<(f64, Vec<Reading>)> = Vec::new();
         for (time, reading) in readings {
@@ -29,7 +31,17 @@ impl Trajectory {
                 _ => time_points.push((time, vec![reading])),
             }
         }
-        Self { time_points }
+        Self {
+            condition_index,
+            time_points,
+        }
+    }
+
+    /// Position of the experimental condition the trajectory was measured
+    /// under among the conditions of its problem.
+    #[must_use]
+    pub fn condition_index(&self) -> usize {
+        self.condition_index
     }
 
     /// The time points in increasing order, each with its readings.

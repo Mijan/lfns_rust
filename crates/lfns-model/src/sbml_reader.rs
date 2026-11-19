@@ -1,14 +1,12 @@
-//! Reader for the reaction-network subset of SBML.
+//! Reader for the supported subset of SBML.
 //!
-//! Supported: compartments with a size, species with an initial amount or
-//! concentration, global and reaction-local parameters, and reactions with
-//! constant stoichiometries and a MathML kinetic law. Rules, events,
-//! function definitions, initial assignments, and constraints are rejected
-//! with an error that names them.
-//!
-//! The network is expressed in amounts. A species that SBML measures as a
-//! concentration (no `hasOnlySubstanceUnits`) is replaced in every kinetic
-//! law by its amount divided by the compartment size.
+//! Supported: compartments with a constant size, species with an initial
+//! amount or concentration, global and reaction-local parameters, reactions
+//! with constant stoichiometries and a kinetic law, rate rules on species,
+//! assignment rules on parameters, and events that assign parameters at a
+//! fixed time (trigger `time >= constant`). Function definitions, initial
+//! assignments, constraints, algebraic rules, and state-triggered events
+//! are rejected with an error that names them.
 
 use std::collections::HashMap;
 
@@ -17,14 +15,13 @@ use roxmltree::{Document, Node};
 use crate::expression::{BinaryOperator, Expression};
 use crate::mathml_reader::MathmlReader;
 use crate::model_error::ModelError;
-use crate::reaction_network::{Quantity, Reaction, ReactionNetwork};
+use crate::reaction_network::{
+    AssignmentRule, Quantity, RateRule, Reaction, ReactionNetwork, Species, TimedAssignment,
+};
 
 /// A species as declared in SBML.
 struct SbmlSpecies {
-    id: String,
-    initial_amount: f64,
-    /// Size of the compartment if kinetic laws see a concentration.
-    concentration_volume: Option<f64>,
+    species: Species,
     /// Whether reactions leave the amount unchanged.
     is_fixed: bool,
 }
@@ -37,7 +34,7 @@ pub(crate) struct SbmlReader<'a, 'input> {
 }
 
 impl ReactionNetwork {
-    /// Reads a reaction network from the text of an SBML document.
+    /// Reads a model from the text of an SBML document.
     ///
     /// # Errors
     ///
@@ -56,9 +53,7 @@ impl ReactionNetwork {
 }
 
 impl<'a, 'input> SbmlReader<'a, 'input> {
-    const UNSUPPORTED_LISTS: [(&'static str, &'static str); 5] = [
-        ("listOfRules", "rules"),
-        ("listOfEvents", "events"),
+    const UNSUPPORTED_LISTS: [(&'static str, &'static str); 3] = [
         ("listOfFunctionDefinitions", "function definitions"),
         ("listOfInitialAssignments", "initial assignments"),
         ("listOfConstraints", "constraints"),
@@ -88,21 +83,24 @@ impl<'a, 'input> SbmlReader<'a, 'input> {
     }
 
     fn read_network(&self) -> Result<ReactionNetwork, ModelError> {
-        let species = self
-            .species
-            .iter()
-            .map(|s| Quantity {
-                id: s.id.clone(),
-                value: s.initial_amount,
-            })
-            .collect();
+        let (assignment_rules, rate_rules) = self.read_rules()?;
+        let is_rule_target = |node: &Node| {
+            assignment_rules
+                .iter()
+                .any(|rule| Some(rule.id.as_str()) == node.attribute("id"))
+        };
         let parameters = Self::items(self.model, "listOfParameters")
+            .filter(|node| !is_rule_target(node))
             .map(Self::read_parameter)
             .collect::<Result<_, _>>()?;
         let reactions = Self::items(self.model, "listOfReactions")
             .map(|node| self.read_reaction(node))
             .collect::<Result<_, _>>()?;
-        Ok(ReactionNetwork::new(species, parameters, reactions))
+        let species = self.species.iter().map(|declared| declared.species.clone()).collect();
+        ReactionNetwork::new(species, parameters, reactions)
+            .with_rate_rules(rate_rules)
+            .with_assignment_rules(assignment_rules)?
+            .with_timed_assignments(self.read_events()?)
     }
 
     fn read_species(&self, node: Node) -> Result<SbmlSpecies, ModelError> {
@@ -112,26 +110,26 @@ impl<'a, 'input> SbmlReader<'a, 'input> {
             .and_then(|c| self.compartment_sizes.get(c))
             .copied()
             .unwrap_or(1.0);
-        let initial_amount = match (
+        let substance_only = node.attribute("hasOnlySubstanceUnits") == Some("true");
+        let species = match (
             Self::number(node, "initialAmount")?,
             Self::number(node, "initialConcentration")?,
         ) {
-            (Some(amount), _) => amount,
-            (None, Some(concentration)) => concentration * volume,
+            (Some(amount), _) => Species {
+                id,
+                initial_amount: amount,
+                volume: (!substance_only).then_some(volume),
+            },
+            (None, Some(concentration)) if substance_only => Species::amount(&id, concentration * volume),
+            (None, Some(concentration)) => Species::concentration(&id, concentration, volume),
             (None, None) => {
                 let reason = format!("species `{id}` has neither initialAmount nor initialConcentration");
                 return Err(ModelError::Sbml { reason });
             }
         };
-        let substance_only = node.attribute("hasOnlySubstanceUnits") == Some("true");
         let is_fixed =
             node.attribute("boundaryCondition") == Some("true") || node.attribute("constant") == Some("true");
-        Ok(SbmlSpecies {
-            id,
-            initial_amount,
-            concentration_volume: (!substance_only).then_some(volume),
-            is_fixed,
-        })
+        Ok(SbmlSpecies { species, is_fixed })
     }
 
     fn read_parameter(node: Node) -> Result<Quantity, ModelError> {
@@ -142,39 +140,104 @@ impl<'a, 'input> SbmlReader<'a, 'input> {
         Ok(Quantity { id, value })
     }
 
+    /// Reads the rules: assignment rules on parameters and rate rules on
+    /// species.
+    fn read_rules(&self) -> Result<(Vec<AssignmentRule>, Vec<RateRule>), ModelError> {
+        let (mut assignment_rules, mut rate_rules) = (Vec::new(), Vec::new());
+        for rule in Self::items(self.model, "listOfRules") {
+            let variable = rule.attribute("variable").unwrap_or_default();
+            let species_index = self.species.iter().position(|declared| declared.species.id == variable);
+            let expression = self.read_math(rule, &format!("the rule of `{variable}`"))?;
+            match (rule.tag_name().name(), species_index) {
+                ("assignmentRule", None) => assignment_rules.push(AssignmentRule {
+                    id: variable.to_owned(),
+                    expression,
+                }),
+                ("rateRule", Some(species_index)) => rate_rules.push(RateRule {
+                    species_index,
+                    rate: expression,
+                }),
+                ("assignmentRule", Some(_)) => {
+                    return Err(Self::unsupported(&format!(
+                        "an assignment rule on the species `{variable}`"
+                    )));
+                }
+                ("rateRule", None) => {
+                    return Err(Self::unsupported(&format!(
+                        "a rate rule on `{variable}`, which is not a species"
+                    )));
+                }
+                (other, _) => return Err(Self::unsupported(&format!("rules of kind <{other}>"))),
+            }
+        }
+        Ok((assignment_rules, rate_rules))
+    }
+
+    /// Reads the events as timed assignments. An event whose trigger is
+    /// already true at time zero fires there only if the trigger declares
+    /// `initialValue="false"`, as SBML prescribes.
+    fn read_events(&self) -> Result<Vec<TimedAssignment>, ModelError> {
+        let mut assignments = Vec::new();
+        for event in Self::items(self.model, "listOfEvents") {
+            let id = event.attribute("id").unwrap_or("<unnamed>");
+            if Self::child(event, "delay").is_some() || Self::child(event, "priority").is_some() {
+                return Err(Self::unsupported(&format!("the delay or priority of event `{id}`")));
+            }
+            let trigger = Self::child(event, "trigger").ok_or_else(|| ModelError::Sbml {
+                reason: format!("event `{id}` has no trigger"),
+            })?;
+            let time = Self::trigger_time(&self.read_math(trigger, &format!("the trigger of event `{id}`"))?, id)?;
+            if time <= 0.0 && trigger.attribute("initialValue") != Some("false") {
+                continue;
+            }
+            for assignment in Self::items(event, "listOfEventAssignments") {
+                let parameter = assignment.attribute("variable").unwrap_or_default().to_owned();
+                let value = self.read_math(assignment, &format!("an assignment of event `{id}`"))?;
+                assignments.push(TimedAssignment { time, parameter, value });
+            }
+        }
+        Ok(assignments)
+    }
+
+    /// The firing time of a trigger of the form `time >= constant`.
+    fn trigger_time(trigger: &Expression, event_id: &str) -> Result<f64, ModelError> {
+        match trigger {
+            Expression::Binary(BinaryOperator::GreaterEqual | BinaryOperator::Greater, left, right) => {
+                match (left.as_ref(), right.as_ref()) {
+                    (Expression::Symbol(symbol), Expression::Number(time)) if symbol == Expression::TIME => Ok(*time),
+                    _ => Err(Self::unsupported(&format!(
+                        "the trigger of event `{event_id}`, which is not `time >= constant`"
+                    ))),
+                }
+            }
+            _ => Err(Self::unsupported(&format!(
+                "the trigger of event `{event_id}`, which is not `time >= constant`"
+            ))),
+        }
+    }
+
     fn read_reaction(&self, node: Node) -> Result<Reaction, ModelError> {
         let id = Self::id(node)?;
         let law = Self::child(node, "kineticLaw").ok_or_else(|| ModelError::Sbml {
             reason: format!("reaction `{id}` has no kinetic law"),
         })?;
-        let math = Self::child(law, "math").ok_or_else(|| ModelError::Sbml {
-            reason: format!("the kinetic law of reaction `{id}` has no <math>"),
-        })?;
         let local_values = Self::read_local_parameters(law)?;
-        let rate = MathmlReader::read_math(math)?.substitute(&|name| self.resolve_symbol(name, &local_values));
+        let rate = self.read_math(law, &format!("the kinetic law of reaction `{id}`"))?;
+        let rate = rate.substitute(&|name| local_values.get(name).map(|value| Expression::Number(*value)));
         let mut net_changes = Vec::new();
         self.add_changes(node, "listOfReactants", -1.0, &mut net_changes)?;
         self.add_changes(node, "listOfProducts", 1.0, &mut net_changes)?;
         Ok(Reaction { id, net_changes, rate })
     }
 
-    /// Replaces reaction-local parameters and compartments by their values
-    /// and concentration species by amount over volume.
-    fn resolve_symbol(&self, name: &str, local_values: &HashMap<String, f64>) -> Option<Expression> {
-        if let Some(value) = local_values.get(name).or_else(|| self.compartment_sizes.get(name)) {
-            return Some(Expression::Number(*value));
-        }
-        let volume = self
-            .species
-            .iter()
-            .find(|species| species.id == name)?
-            .concentration_volume?;
-        let amount = Expression::Symbol(name.to_owned());
-        Some(Expression::binary(
-            BinaryOperator::Divide,
-            amount,
-            Expression::Number(volume),
-        ))
+    /// Reads the `<math>` child of `parent`, with compartments replaced by
+    /// their sizes.
+    fn read_math(&self, parent: Node, context: &str) -> Result<Expression, ModelError> {
+        let math = Self::child(parent, "math").ok_or_else(|| ModelError::Sbml {
+            reason: format!("{context} has no <math>"),
+        })?;
+        let compartment_size = |name: &str| self.compartment_sizes.get(name).map(|size| Expression::Number(*size));
+        Ok(MathmlReader::read_math(math)?.substitute(&compartment_size))
     }
 
     fn read_local_parameters(law: Node) -> Result<HashMap<String, f64>, ModelError> {
@@ -197,7 +260,7 @@ impl<'a, 'input> SbmlReader<'a, 'input> {
             let index = self
                 .species
                 .iter()
-                .position(|species| species.id == name)
+                .position(|declared| declared.species.id == name)
                 .ok_or_else(|| ModelError::Sbml {
                     reason: format!("a reaction refers to the undeclared species `{name}`"),
                 })?;
@@ -211,6 +274,12 @@ impl<'a, 'input> SbmlReader<'a, 'input> {
             }
         }
         Ok(())
+    }
+
+    fn unsupported(feature: &str) -> ModelError {
+        ModelError::UnsupportedSbml {
+            feature: feature.to_owned(),
+        }
     }
 
     fn child<'n, 'i>(node: Node<'n, 'i>, name: &str) -> Option<Node<'n, 'i>> {
@@ -271,36 +340,92 @@ mod tests {
       </model>
     </sbml>"#;
 
+    /// Value buffer of the dimerisation model: amounts of `A` and `D`, the
+    /// parameter `scale`, and the time.
+    const VALUES: [f64; 4] = [10.0, 1.0, 3.0, 0.0];
+
+    fn rate_of_first_reaction(network: &ReactionNetwork) -> Result<f64, ModelError> {
+        let rate = network.compile_expression(&network.reactions()[0].rate, "test")?;
+        Ok(rate.evaluate(&VALUES, &mut Vec::new()))
+    }
+
     #[test]
     fn concentrations_become_amounts_and_local_parameters_become_numbers() -> Result<(), ModelError> {
         let network = ReactionNetwork::from_sbml(DIMERISATION)?;
         // Initial concentration 5 in volume 2 is an amount of 10.
-        assert!((network.species()[0].value - 10.0).abs() < 1e-12);
+        assert!((network.species()[0].initial_amount - 10.0).abs() < 1e-12);
         assert_eq!(network.reactions()[0].net_changes, vec![(0, -2.0), (1, 1.0)]);
         // Rate = cell * kf * scale * (A / cell)^2 = 2 * 0.5 * 3 * (10 / 2)^2 = 75.
-        let rate = network.compile_rates()?.remove(0);
-        assert!((rate.evaluate(&[10.0, 1.0, 3.0], &mut Vec::new()) - 75.0).abs() < 1e-12);
+        assert!((rate_of_first_reaction(&network)? - 75.0).abs() < 1e-12);
         Ok(())
-    }
-
-    #[test]
-    fn rules_are_rejected_by_name() {
-        let with_rule = DIMERISATION.replace(
-            "<listOfReactions>",
-            r#"<listOfRules><assignmentRule variable="scale"><math/></assignmentRule></listOfRules><listOfReactions>"#,
-        );
-        let error = ReactionNetwork::from_sbml(&with_rule).expect_err("rules are unsupported");
-        assert!(
-            matches!(error, ModelError::UnsupportedSbml { ref feature } if feature == "rules"),
-            "{error}"
-        );
     }
 
     #[test]
     fn exponent_notation_numbers_are_read() -> Result<(), ModelError> {
         let scaled = DIMERISATION.replace("<cn>2</cn>", r#"<cn type="e-notation">2<sep/>0</cn>"#);
-        let rate = ReactionNetwork::from_sbml(&scaled)?.compile_rates()?.remove(0);
-        assert!((rate.evaluate(&[10.0, 1.0, 3.0], &mut Vec::new()) - 75.0).abs() < 1e-12);
+        assert!((rate_of_first_reaction(&ReactionNetwork::from_sbml(&scaled)?)? - 75.0).abs() < 1e-12);
         Ok(())
+    }
+
+    #[test]
+    fn rules_and_timed_events_are_read() -> Result<(), ModelError> {
+        let math = r#"<math xmlns="http://www.w3.org/1998/Math/MathML">"#;
+        let time = r#"<csymbol encoding="text" definitionURL="http://www.sbml.org/sbml/symbols/time"> time </csymbol>"#;
+        let additions = format!(
+            r#"<listOfRules>
+                 <assignmentRule variable="twice">{math}<apply><times/><cn>2</cn><ci>scale</ci></apply></math></assignmentRule>
+                 <rateRule variable="D">{math}<apply><max/><ci>twice</ci><cn>0</cn></apply></math></rateRule>
+               </listOfRules>
+               <listOfEvents>
+                 <event id="late"><trigger initialValue="false">{math}<apply><geq/>{time}<cn>5</cn></apply></math></trigger>
+                   <listOfEventAssignments><eventAssignment variable="scale">{math}<cn>7</cn></math></eventAssignment></listOfEventAssignments>
+                 </event>
+                 <event id="at_start"><trigger initialValue="false">{math}<apply><geq/>{time}<cn>0</cn></apply></math></trigger>
+                   <listOfEventAssignments><eventAssignment variable="scale">{math}<cn>4</cn></math></eventAssignment></listOfEventAssignments>
+                 </event>
+               </listOfEvents>
+               <listOfReactions>"#
+        );
+        let with_rules = DIMERISATION.replace("<listOfReactions>", &additions).replace(
+            r#"<parameter id="scale" value="3"/>"#,
+            r#"<parameter id="scale" value="3"/><parameter id="twice"/>"#,
+        );
+        let network = ReactionNetwork::from_sbml(&with_rules)?;
+        assert_eq!(network.assignment_rules()[0].id, "twice");
+        assert_eq!(network.rate_rules()[0].species_index, 1);
+        assert_eq!(network.parameters().len(), 1, "a rule target is not a parameter");
+        let times: Vec<f64> = network
+            .timed_assignments()
+            .iter()
+            .map(|assignment| assignment.time)
+            .collect();
+        assert_eq!(times, vec![0.0, 5.0]);
+        assert!(!network.is_pure_reaction_network());
+        Ok(())
+    }
+
+    #[test]
+    fn state_triggered_events_are_rejected_by_name() {
+        let math = r#"<math xmlns="http://www.w3.org/1998/Math/MathML">"#;
+        let event = format!(
+            r#"<listOfEvents><event id="threshold"><trigger>{math}<apply><gt/><ci>A</ci><cn>1</cn></apply></math></trigger>
+               </event></listOfEvents><listOfReactions>"#
+        );
+        let error = ReactionNetwork::from_sbml(&DIMERISATION.replace("<listOfReactions>", &event))
+            .expect_err("unsupported trigger");
+        assert!(error.to_string().contains("threshold"), "{error}");
+    }
+
+    #[test]
+    fn function_definitions_are_rejected_by_name() {
+        let with_function = DIMERISATION.replace(
+            "<listOfReactions>",
+            r#"<listOfFunctionDefinitions><functionDefinition id="f"/></listOfFunctionDefinitions><listOfReactions>"#,
+        );
+        let error = ReactionNetwork::from_sbml(&with_function).expect_err("function definitions are unsupported");
+        assert!(
+            matches!(error, ModelError::UnsupportedSbml { ref feature } if feature == "function definitions"),
+            "{error}"
+        );
     }
 }

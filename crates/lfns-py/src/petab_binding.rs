@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use ::lfns::{NestedSampler, RunConfig};
+use ::lfns::RunConfig;
 use ::lfns_model::{LikelihoodMethod, OdeSettings, ParticleFilter, PetabLikelihood, PetabProblem};
 use numpy::ndarray::{Array1, Array2};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -12,7 +12,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::run_result::PyRunResult;
-use crate::run_settings::RunSettings;
+use crate::run_settings::{Checkpointing, RunSettings};
 use crate::to_value_error;
 
 /// Measurement times, observable indices, and measured values of one
@@ -60,6 +60,39 @@ pub(crate) struct PyPetabProblem {
     problem: PetabProblem,
 }
 
+impl PyPetabProblem {
+    /// Values of all model parameters when the estimated ones take the
+    /// given values.
+    fn model_parameters(&self, estimated_values: &PyReadonlyArray1<'_, f64>) -> PyResult<Vec<f64>> {
+        let space = self.problem.parameter_space();
+        let values = estimated_values.as_array().to_vec();
+        if values.len() != space.estimated().len() {
+            return Err(PyValueError::new_err(format!(
+                "got {} parameter values but the problem estimates {}; pass one value per entry of `parameter_ids`",
+                values.len(),
+                space.estimated().len()
+            )));
+        }
+        Ok(space.model_parameters_from_values(&values))
+    }
+
+    /// Position of the condition named `condition`; the first condition if
+    /// none is named.
+    fn condition_index(&self, condition: Option<&str>) -> PyResult<usize> {
+        let Some(id) = condition else { return Ok(0) };
+        self.problem
+            .conditions()
+            .iter()
+            .position(|each| each.id() == id)
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "unknown condition \"{id}\"; the problem defines {:?}",
+                    self.condition_ids()
+                ))
+            })
+    }
+}
+
 #[pymethods]
 impl PyPetabProblem {
     /// Loads the problem described by the PEtab YAML file at `path`.
@@ -92,6 +125,34 @@ impl PyPetabProblem {
     #[getter]
     fn observable_ids(&self) -> Vec<String> {
         self.problem.observable_ids().to_vec()
+    }
+
+    /// Identifiers of the experimental conditions.
+    #[getter]
+    fn condition_ids(&self) -> Vec<String> {
+        self.problem
+            .conditions()
+            .iter()
+            .map(|condition| condition.id().to_owned())
+            .collect()
+    }
+
+    /// The condition of each measured trajectory, in the order of
+    /// `measurements()`.
+    #[getter]
+    fn trajectory_conditions(&self) -> Vec<String> {
+        let conditions = self.problem.conditions();
+        self.problem
+            .trajectories()
+            .iter()
+            .map(|trajectory| conditions[trajectory.condition_index()].id().to_owned())
+            .collect()
+    }
+
+    /// Nominal values of the estimated parameters, from the parameter table.
+    #[getter]
+    fn nominal_parameters<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        Array1::from_vec(self.problem.parameter_space().estimated_nominal_values()).into_pyarray(py)
     }
 
     /// The measured trajectories, each as `(times, observable_indices,
@@ -132,14 +193,15 @@ impl PyPetabProblem {
     }
 
     /// Simulates the model once with the given values of the estimated
-    /// parameters and returns two arrays with one row per time: the species
-    /// amounts and the observables.
+    /// parameters under `condition` (default: the first condition) and
+    /// returns two arrays with one row per time: the species amounts and
+    /// the observables.
     ///
     /// With `dynamics="stochastic"` the model is simulated with Gillespie's
     /// algorithm from `seed` and the observables carry measurement noise.
     /// With `dynamics="deterministic"` the ODE is solved and the observables
     /// are their noise-free expected values.
-    #[pyo3(signature = (parameters, times, seed = 0, *, dynamics = "stochastic"))]
+    #[pyo3(signature = (parameters, times, seed = 0, *, dynamics = "stochastic", condition = None))]
     // Besides `self` and the interpreter token, the arguments are the Python
     // signature of the method.
     #[allow(clippy::too_many_arguments)]
@@ -150,19 +212,21 @@ impl PyPetabProblem {
         times: PyReadonlyArray1<'py, f64>,
         seed: u64,
         dynamics: &str,
+        condition: Option<&str>,
     ) -> PyResult<SimulatedArrays<'py>> {
-        let model_parameters = self
-            .problem
-            .parameter_space()
-            .model_parameters_from_values(&parameters.as_array().to_vec());
+        let model_parameters = self.model_parameters(&parameters)?;
+        let condition_index = self.condition_index(condition)?;
         let times = times.as_array().to_vec();
         let trajectory = match parse_method(dynamics, (dynamics == "stochastic").then_some(1))? {
-            LikelihoodMethod::ParticleFilter(_) => {
-                self.problem
-                    .simulate(&model_parameters, &times, &mut ChaCha8Rng::seed_from_u64(seed))
-            }
+            LikelihoodMethod::ParticleFilter(_) => self.problem.simulate(
+                &model_parameters,
+                condition_index,
+                &times,
+                &mut ChaCha8Rng::seed_from_u64(seed),
+            ),
             LikelihoodMethod::Deterministic(settings) => {
-                self.problem.simulate_deterministic(&model_parameters, &times, settings)
+                self.problem
+                    .simulate_deterministic(&model_parameters, condition_index, &times, settings)
             }
         };
         let trajectory = trajectory.map_err(to_value_error)?;
@@ -186,7 +250,8 @@ impl PyPetabProblem {
             .problem
             .parameter_space()
             .model_parameters_from_values(&parameters.as_array().to_vec());
-        let likelihood = PetabLikelihood::new(self.problem.clone(), parse_method(dynamics, n_particles)?);
+        let likelihood =
+            PetabLikelihood::new(self.problem.clone(), parse_method(dynamics, n_particles)?).map_err(to_value_error)?;
         likelihood
             .estimate_for_parameters(&model_parameters, &mut ChaCha8Rng::seed_from_u64(seed))
             .map_err(to_value_error)
@@ -196,16 +261,16 @@ impl PyPetabProblem {
     /// `dynamics="stochastic"` the likelihood is estimated with
     /// `n_particles` filter particles; with `dynamics="deterministic"` the
     /// ODE is solved and the likelihood is exact. See `lfns.run` for the
-    /// remaining settings.
+    /// remaining settings, including checkpointing and resuming.
     #[pyo3(signature = (
         *, n_live, n_replaced, dynamics = "stochastic", n_particles = None, seed = 0,
         termination_tolerance = RunConfig::DEFAULT_TERMINATION_TOLERANCE, max_iterations = None,
         proposal = "dpgmm", rejection_quantile = ::lfns::DpgmmProposalConfig::DEFAULT_REJECTION_QUANTILE,
-        n_sweeps = ::dpgmm::DpgmmConfig::DEFAULT_N_SWEEPS, run_directory = None,
+        n_sweeps = ::dpgmm::DpgmmConfig::DEFAULT_N_SWEEPS, run_directory = None, resume = false, progress = false,
     ))]
     // The many arguments are keyword-only in Python, where they form the
     // public configuration surface of a run.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     fn run(
         &self,
         py: Python<'_>,
@@ -220,20 +285,18 @@ impl PyPetabProblem {
         rejection_quantile: f64,
         n_sweeps: u32,
         run_directory: Option<PathBuf>,
+        resume: bool,
+        progress: bool,
     ) -> PyResult<PyRunResult> {
         let settings = RunSettings::new((n_live, n_replaced), seed, termination_tolerance, max_iterations)?
             .with_proposal(proposal, rejection_quantile, n_sweeps)?
-            .with_run_directory(run_directory)?;
-        let likelihood = PetabLikelihood::new(self.problem.clone(), parse_method(dynamics, n_particles)?);
-        let (config, fitter, mut recorder) = settings.into_parts();
-        let sampler = NestedSampler::new(config, likelihood, fitter);
-        let outcome = py.detach(|| sampler.initialize().and_then(|state| sampler.run(state, &mut recorder)));
-        let outcome = outcome.map_err(to_value_error)?;
-        let stop_reason = outcome.stop_reason();
-        Ok(PyRunResult::new(
-            outcome.into_state(),
-            recorder.into_reports(),
-            stop_reason,
-        ))
+            .with_checkpointing(Checkpointing {
+                run_directory,
+                resume,
+                progress,
+            })?;
+        let likelihood =
+            PetabLikelihood::new(self.problem.clone(), parse_method(dynamics, n_particles)?).map_err(to_value_error)?;
+        settings.run_sampler(py, likelihood)
     }
 }

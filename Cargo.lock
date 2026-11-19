@@ -680,6 +680,7 @@ name = "lfns"
 version = "0.1.0"
 dependencies = [
  "dpgmm",
+ "libm",
  "rand",
  "rand_chacha",
  "rayon",

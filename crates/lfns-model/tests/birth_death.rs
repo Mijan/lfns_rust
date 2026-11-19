@@ -119,8 +119,7 @@ fn simulated_counts_follow_the_poisson_law_of_the_birth_death_process() -> TestR
     let (n_runs, end_time) = (4000_u32, 30.0);
     let (mut sum, mut sum_of_squares) = (0.0, 0.0);
     for _ in 0..n_runs {
-        let mut values = vec![0.0; model.value_width()];
-        model.write_initial_values(model.default_parameters(), &mut values);
+        let mut values = problem.initial_values(model.default_parameters(), 0);
         simulator.advance(&mut values, (0.0, end_time), &mut scratch, &mut rng)?;
         sum += values[0];
         sum_of_squares += values[0] * values[0];
@@ -141,7 +140,7 @@ fn particle_filter_estimate_is_unbiased_for_the_exact_likelihood() -> TestResult
     let problem = load_problem()?;
     let exact = exact_log_likelihood(&problem);
     let parameters = problem.model().default_parameters().to_vec();
-    let likelihood = PetabLikelihood::new(problem, LikelihoodMethod::ParticleFilter(ParticleFilter::new(30)?));
+    let likelihood = PetabLikelihood::new(problem, LikelihoodMethod::ParticleFilter(ParticleFilter::new(30)?))?;
     let mut rng = ChaCha8Rng::seed_from_u64(2);
     let n_runs = 300_u32;
     let mut ratio_sum = 0.0;
@@ -161,7 +160,7 @@ fn particle_filter_estimate_is_unbiased_for_the_exact_likelihood() -> TestResult
 fn a_single_particle_gives_a_finite_estimate() -> TestResult {
     let problem = load_problem()?;
     let parameters = problem.model().default_parameters().to_vec();
-    let likelihood = PetabLikelihood::new(problem, LikelihoodMethod::ParticleFilter(ParticleFilter::new(1)?));
+    let likelihood = PetabLikelihood::new(problem, LikelihoodMethod::ParticleFilter(ParticleFilter::new(1)?))?;
     let estimate = likelihood.estimate_for_parameters(&parameters, &mut ChaCha8Rng::seed_from_u64(3))?;
     assert!(estimate.is_finite());
     Ok(())

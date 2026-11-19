@@ -54,7 +54,9 @@ impl ParticleFilter {
     }
 
     /// Returns the logarithm of one unbiased estimate of the likelihood of
-    /// `trajectory` under `model` with the given `parameters`.
+    /// `trajectory` under `model`, every particle starting from the species
+    /// amounts and parameters in `initial_values`. The model must be a pure
+    /// reaction network.
     ///
     /// # Errors
     ///
@@ -63,12 +65,12 @@ impl ParticleFilter {
     pub fn estimate_log_likelihood<R: Rng + ?Sized>(
         &self,
         model: &SimulationModel,
-        parameters: &[f64],
+        initial_values: &[f64],
         trajectory: &Trajectory,
         rng: &mut R,
     ) -> Result<f64, SimulationFailure> {
         let simulator = StochasticSimulator::new(model);
-        let mut cloud = ParticleCloud::new(model, parameters, self.n_particles);
+        let mut cloud = ParticleCloud::new(initial_values, self.n_particles);
         let (mut time, mut log_likelihood) = (0.0, 0.0);
         for (index, (next_time, readings)) in trajectory.time_points().iter().enumerate() {
             cloud.advance_and_weigh(&simulator, (time, *next_time), readings, rng)?;
@@ -87,14 +89,10 @@ impl ParticleFilter {
 }
 
 impl ParticleCloud {
-    fn new(model: &SimulationModel, parameters: &[f64], n_particles: usize) -> Self {
-        let width = model.value_width();
-        let mut values = vec![0.0; width * n_particles];
-        for particle in values.chunks_exact_mut(width) {
-            model.write_initial_values(parameters, particle);
-        }
+    fn new(initial_values: &[f64], n_particles: usize) -> Self {
+        let values = initial_values.repeat(n_particles);
         Self {
-            width,
+            width: initial_values.len(),
             resampled: values.clone(),
             values,
             log_weights: vec![0.0; n_particles],

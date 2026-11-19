@@ -1,10 +1,10 @@
-//! Deterministic simulation of a reaction network as an ordinary
-//! differential equation.
+//! Deterministic simulation of a model as an ordinary differential equation.
 //!
-//! The species amounts follow `dx/dt = sum_r change_r * rate_r(x, p)`. The
-//! equation is integrated with the variable-order BDF method of `diffsol`,
-//! which is suited to the stiff systems typical of reaction networks. The
-//! Jacobian comes from the symbolic derivatives of the rate laws.
+//! The equation is integrated with the variable-order BDF method of
+//! `diffsol`, which is suited to the stiff systems typical of reaction
+//! networks. The Jacobian comes from forward-mode differentiation of the
+//! model's formulas. Timed assignments split the integration into segments
+//! within which the parameters are constant.
 
 use std::cell::RefCell;
 
@@ -12,7 +12,7 @@ use diffsol::{NalgebraLU, NalgebraMat, OdeBuilder, OdeSolverMethod};
 
 use crate::model_error::ModelError;
 use crate::simulation_failure::SimulationFailure;
-use crate::simulation_model::SimulationModel;
+use crate::simulation_model::{DualScratch, SimulationModel};
 
 /// Accuracy and effort limits of the ODE solver.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -27,7 +27,8 @@ impl OdeSettings {
     pub const DEFAULT_RELATIVE_TOLERANCE: f64 = 1e-8;
     /// Default absolute tolerance on the species amounts.
     pub const DEFAULT_ABSOLUTE_TOLERANCE: f64 = 1e-10;
-    /// Default bound on the number of solver steps of one integration.
+    /// Default bound on the number of solver steps between two timed
+    /// assignments.
     pub const DEFAULT_MAX_STEPS: usize = 100_000;
 
     /// Creates settings with the given tolerances and the default step limit.
@@ -53,7 +54,8 @@ impl OdeSettings {
         })
     }
 
-    /// Returns a copy that gives up after `max_steps` solver steps.
+    /// Returns a copy that gives up after `max_steps` solver steps between
+    /// two timed assignments.
     #[must_use]
     pub fn with_max_steps(self, max_steps: usize) -> Self {
         Self { max_steps, ..self }
@@ -73,12 +75,12 @@ impl Default for OdeSettings {
 /// Buffers shared by the callbacks the solver invokes.
 #[derive(Default)]
 struct OdeScratch {
-    /// Species amounts followed by parameters, as the formulas expect.
     values: Vec<f64>,
     stack: Vec<f64>,
+    dual: DualScratch,
 }
 
-/// Integrates the ODE of a model from its initial state.
+/// Integrates the ODE of a model.
 #[derive(Debug, Clone, Copy)]
 pub struct DeterministicSimulator<'a> {
     model: &'a SimulationModel,
@@ -92,44 +94,98 @@ impl<'a> DeterministicSimulator<'a> {
         Self { model, settings }
     }
 
-    /// Integrates from time 0 with the given values of all model parameters
-    /// and returns the species amounts at each of `times` (increasing), one
-    /// row per time.
+    /// Integrates from time 0, starting from the species amounts and
+    /// parameters in `initial_values`, and returns the full value buffer at
+    /// each of `times` (non-negative and increasing), with its derived
+    /// values up to date.
+    ///
+    /// A buffer recorded exactly at the time of a timed assignment reflects
+    /// the parameters after the assignment.
     ///
     /// # Errors
     ///
     /// Returns [`SimulationFailure::SolverFailed`] if the solver cannot
-    /// reach the last time within its limits.
-    pub fn solve(&self, parameters: &[f64], times: &[f64]) -> Result<Vec<Vec<f64>>, SimulationFailure> {
+    /// complete a segment within its limits.
+    pub fn solve(&self, initial_values: &[f64], times: &[f64]) -> Result<Vec<Vec<f64>>, SimulationFailure> {
+        let assignment_times = self.model.assignment_times();
+        let last_time = times.last().copied().unwrap_or(0.0);
+        let (mut values, mut stack) = (initial_values.to_vec(), Vec::new());
+        let (mut time, mut recorded) = (0.0, Vec::with_capacity(times.len()));
+        loop {
+            self.model.apply_assignments_at(time, &mut values, &mut stack);
+            self.model.refresh_derived_values(&mut values, time, &mut stack);
+            let n_due = times[recorded.len()..]
+                .iter()
+                .take_while(|output| **output <= time)
+                .count();
+            recorded.extend(std::iter::repeat_n(values.clone(), n_due));
+            if recorded.len() == times.len() {
+                return Ok(recorded);
+            }
+            let next_assignment = assignment_times.iter().copied().find(|assignment| *assignment > time);
+            let segment_end = next_assignment.map_or(last_time, |assignment| assignment.min(last_time));
+            let n_inside = times[recorded.len()..]
+                .iter()
+                .take_while(|output| **output < segment_end)
+                .count();
+            let mut outputs = times[recorded.len()..recorded.len() + n_inside].to_vec();
+            outputs.push(segment_end);
+            let states = self.integrate_segment(&values, time, &outputs)?;
+            for (state, output) in states.iter().zip(&outputs).take(n_inside) {
+                recorded.push(self.buffer_with_state(&values, state, *output, &mut stack));
+            }
+            values[..self.model.n_species()].copy_from_slice(&states[n_inside]);
+            time = segment_end;
+        }
+    }
+
+    /// A copy of `values` holding `state` at `time`, derived values
+    /// refreshed.
+    fn buffer_with_state(&self, values: &[f64], state: &[f64], time: f64, stack: &mut Vec<f64>) -> Vec<f64> {
+        let mut buffer = values.to_vec();
+        buffer[..state.len()].copy_from_slice(state);
+        self.model.refresh_derived_values(&mut buffer, time, stack);
+        buffer
+    }
+
+    /// Integrates with constant parameters from `start` and returns the
+    /// species amounts at each of `outputs` (increasing, after `start`).
+    fn integrate_segment(
+        &self,
+        values: &[f64],
+        start: f64,
+        outputs: &[f64],
+    ) -> Result<Vec<Vec<f64>>, SimulationFailure> {
         let n_species = self.model.n_species();
-        let mut initial_values = vec![0.0; self.model.value_width()];
-        self.model.write_initial_values(parameters, &mut initial_values);
-        let scratch = RefCell::new(OdeScratch::default());
-        let load = |amounts: &[f64], parameters: &[f64]| {
+        let scratch = RefCell::new(OdeScratch {
+            values: values.to_vec(),
+            ..OdeScratch::default()
+        });
+        let load = |amounts: &[f64], time: f64| {
             let mut scratch = scratch.borrow_mut();
-            scratch.values.clear();
-            scratch.values.extend_from_slice(amounts);
-            scratch.values.extend_from_slice(parameters);
+            let OdeScratch { values, stack, .. } = &mut *scratch;
+            values[..n_species].copy_from_slice(amounts);
+            self.model.refresh_derived_values(values, time, stack);
             scratch
         };
         let mut problem = OdeBuilder::<NalgebraMat<f64>>::new()
+            .t0(start)
             .rtol(self.settings.relative_tolerance)
             .atol([self.settings.absolute_tolerance])
-            .p(parameters.iter().copied())
             .rhs_implicit(
-                |amounts, parameters, _time, derivative| {
-                    let scratch = &mut *load(amounts, parameters);
+                |amounts, _parameters, time, derivative| {
+                    let scratch = &mut *load(amounts, time);
                     self.model
                         .write_time_derivative(&scratch.values, &mut scratch.stack, derivative);
                 },
-                |amounts, parameters, _time, direction, product| {
-                    let scratch = &mut *load(amounts, parameters);
+                |amounts, _parameters, time, direction, product| {
+                    let scratch = &mut *load(amounts, time);
                     self.model
-                        .write_jacobian_product(&scratch.values, direction, &mut scratch.stack, product);
+                        .write_jacobian_product(&scratch.values, direction, &mut scratch.dual, product);
                 },
             )
             .init(
-                |_parameters, _time, amounts| amounts.copy_from_slice(&initial_values[..n_species]),
+                |_parameters, _time, amounts| amounts.copy_from_slice(&values[..n_species]),
                 n_species,
             )
             .build()
@@ -138,8 +194,8 @@ impl<'a> DeterministicSimulator<'a> {
         let mut solver = problem
             .bdf::<NalgebraLU<f64>>()
             .map_err(|error| Self::failure(&error))?;
-        let (solution, _stop_reason) = solver.solve_dense(times).map_err(|error| Self::failure(&error))?;
-        Ok((0..times.len())
+        let (solution, _stop_reason) = solver.solve_dense(outputs).map_err(|error| Self::failure(&error))?;
+        Ok((0..outputs.len())
             .map(|column| (0..n_species).map(|row| solution[(row, column)]).collect())
             .collect())
     }
