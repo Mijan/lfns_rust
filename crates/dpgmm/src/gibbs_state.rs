@@ -6,6 +6,12 @@
 //! component's size times its Student t predictive density, and opens a new
 //! component with probability proportional to the concentration times the
 //! prior predictive density.
+//!
+//! Moving one point changes its component's posterior by a rank-one term,
+//! so a component's posterior is updated in place in `O(d^2)` when a point
+//! leaves or joins it. The posteriors are derived afresh from the
+//! components' statistics once per sweep, when the hyperparameters are
+//! redrawn, which also keeps rounding from accumulating.
 
 use nalgebra::DMatrix;
 use rand::{Rng, RngExt};
@@ -20,6 +26,51 @@ use crate::normal_wishart::{GaussianDraw, NormalWishart};
 struct Cluster {
     statistics: ComponentStatistics,
     posterior: NormalWishart,
+}
+
+impl Cluster {
+    /// Adds `point` to the component and conditions its posterior on it,
+    /// in `O(d^2)`.
+    fn admit(
+        &mut self,
+        point: &[f64],
+        hyperparameters: &Hyperparameters,
+        scratch: &mut [f64],
+    ) -> Result<(), DpgmmError> {
+        self.statistics.add_point(point);
+        let update = self.posterior.absorb_observation(point, scratch);
+        self.settle_posterior(update, hyperparameters)
+    }
+
+    /// Removes `point`, one of the component's points, and its influence
+    /// on the posterior, in `O(d^2)`. The component must keep a point.
+    fn dismiss(
+        &mut self,
+        point: &[f64],
+        hyperparameters: &Hyperparameters,
+        scratch: &mut [f64],
+    ) -> Result<(), DpgmmError> {
+        self.statistics.remove_point(point);
+        let update = self.posterior.release_observation(point, scratch);
+        self.settle_posterior(update, hyperparameters)
+    }
+
+    /// Accepts an in-place update of the posterior, or, where rounding made
+    /// it break down, derives the posterior afresh from the statistics,
+    /// which define it exactly.
+    fn settle_posterior(
+        &mut self,
+        update: Result<(), DpgmmError>,
+        hyperparameters: &Hyperparameters,
+    ) -> Result<(), DpgmmError> {
+        match update {
+            Err(DpgmmError::NumericalBreakdown { .. }) => {
+                self.posterior = self.statistics.derive_posterior(hyperparameters)?;
+                Ok(())
+            }
+            other => other,
+        }
+    }
 }
 
 /// Assignments, components, and hyperparameters of one Markov chain.
@@ -109,10 +160,8 @@ impl GibbsState {
         };
         let point = &self.coordinates[point_index * self.dimension..(point_index + 1) * self.dimension];
         let cluster = &mut self.clusters[cluster_index];
-        cluster.statistics.remove_point(point);
-        if cluster.statistics.count() > 0 {
-            cluster.posterior = cluster.statistics.derive_posterior(&self.hyperparameters)?;
-            return Ok(());
+        if cluster.statistics.count() > 1 {
+            return cluster.dismiss(point, &self.hyperparameters, &mut self.scratch);
         }
         self.clusters.remove(cluster_index);
         for assigned in self
@@ -138,8 +187,7 @@ impl GibbsState {
             });
         }
         let cluster = &mut self.clusters[cluster_index];
-        cluster.statistics.add_point(point);
-        cluster.posterior = cluster.statistics.derive_posterior(&self.hyperparameters)?;
+        cluster.admit(point, &self.hyperparameters, &mut self.scratch)?;
         self.assignments[point_index] = Some(cluster_index);
         Ok(())
     }
