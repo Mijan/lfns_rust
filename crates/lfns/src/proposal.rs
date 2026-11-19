@@ -15,11 +15,37 @@ pub trait Proposal: Sync {
     fn propose<R: Rng + ?Sized>(&self, rng: &mut R, unit_point: &mut [f64]);
 }
 
+/// What the sampler tells a fitter about the run, besides the live
+/// particles.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FitContext {
+    previous_acceptance_rate: Option<f64>,
+}
+
+impl FitContext {
+    /// The context of an iteration that follows one with the given
+    /// acceptance rate; `None` for the first iteration, which follows none.
+    #[must_use]
+    pub fn after(previous_acceptance_rate: Option<f64>) -> Self {
+        Self {
+            previous_acceptance_rate,
+        }
+    }
+
+    /// Fraction of the previous iteration's proposals that were accepted;
+    /// `None` in the first iteration.
+    #[must_use]
+    pub fn previous_acceptance_rate(&self) -> Option<f64> {
+        self.previous_acceptance_rate
+    }
+}
+
 /// Builds a [`Proposal`] from the live particles of the current iteration.
 ///
 /// A fitter keeps no state between iterations: the proposal of an iteration
-/// depends only on the live particles and on `rng`, so a resumed run
-/// reproduces an uninterrupted one.
+/// depends only on the live particles, on the [`FitContext`] the sampler
+/// derives from the run state, and on `rng`, so a resumed run reproduces an
+/// uninterrupted one.
 pub trait ProposalFitter {
     /// The proposal this fitter produces.
     type Proposal: Proposal;
@@ -32,5 +58,10 @@ pub trait ProposalFitter {
     ///
     /// Returns `Self::Failure` when no proposal can be built from
     /// `live_points`.
-    fn fit<R: Rng + ?Sized>(&self, live_points: &PointMatrix, rng: &mut R) -> Result<Self::Proposal, Self::Failure>;
+    fn fit<R: Rng + ?Sized>(
+        &self,
+        live_points: &PointMatrix,
+        context: FitContext,
+        rng: &mut R,
+    ) -> Result<Self::Proposal, Self::Failure>;
 }

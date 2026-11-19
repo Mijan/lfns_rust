@@ -26,6 +26,7 @@ pub struct RunState {
     population: Population,
     n_dimensions: usize,
     n_proposals: u64,
+    latest_acceptance_rate: Option<f64>,
     live: LiveSet,
     dead: Vec<Particle>,
     dead_log_volume_weights: Vec<f64>,
@@ -35,15 +36,18 @@ pub struct RunState {
 impl RunState {
     /// Starts a run from its initial population.
     pub(crate) fn begin(population: Population, initial: Collection) -> Result<Self, LfnsError> {
-        Self::restore(population, initial.particles, &[], initial.n_proposals)
+        Self::restore(population, initial.particles, &[], initial.n_proposals, None)
     }
 
     /// Rebuilds a state from stored particles by replaying the iterations.
+    /// `latest_acceptance_rate` is that of the last iteration replayed,
+    /// `None` if there is none.
     pub(crate) fn restore(
         population: Population,
         live: Vec<Particle>,
         dead: &[Particle],
         n_proposals: u64,
+        latest_acceptance_rate: Option<f64>,
     ) -> Result<Self, LfnsError> {
         let n_dimensions = live.first().map_or(0, |particle| particle.unit_coordinates().len());
         Self::check_dimensions(live.iter().chain(dead), n_dimensions)?;
@@ -60,6 +64,7 @@ impl RunState {
             population,
             n_dimensions,
             n_proposals,
+            latest_acceptance_rate,
             live: LiveSet::from_particles(population, live)?,
             dead: Vec::with_capacity(dead.len()),
             dead_log_volume_weights: Vec::new(),
@@ -81,6 +86,13 @@ impl RunState {
     #[must_use]
     pub fn n_proposals(&self) -> u64 {
         self.n_proposals
+    }
+
+    /// Fraction of the most recent iteration's proposals that were
+    /// accepted; `None` before the first iteration.
+    #[must_use]
+    pub fn latest_acceptance_rate(&self) -> Option<f64> {
+        self.latest_acceptance_rate
     }
 
     /// Number of parameters of each particle.
@@ -166,13 +178,15 @@ impl RunState {
     pub(crate) fn admit_replacements(&mut self, log_threshold: f64, collection: Collection) -> IterationReport {
         self.n_proposals += collection.n_proposals;
         self.live.add_replacements(collection.particles);
-        IterationReport::of_iteration(
+        let report = IterationReport::of_iteration(
             self.iteration(),
             log_threshold,
             self.population.n_replaced(),
             (collection.n_proposals, collection.n_failures),
             self.estimate_evidence(),
-        )
+        );
+        self.latest_acceptance_rate = Some(report.acceptance_rate());
+        report
     }
 
     fn record_dead_batch(&mut self, batch: Vec<Particle>) {

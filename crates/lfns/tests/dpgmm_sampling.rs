@@ -4,8 +4,8 @@ use std::convert::Infallible;
 
 use dpgmm::DpgmmConfig;
 use lfns::{
-    DpgmmProposalConfig, DpgmmProposalFitter, IterationReport, LikelihoodEstimator, NestedSampler, Population,
-    RunConfig, RunRecorder, RunState, StopReason,
+    CheckpointStore, DpgmmProposalConfig, DpgmmProposalFitter, IterationReport, LikelihoodEstimator, LowAcceptanceRule,
+    NestedSampler, NoRecorder, Population, RunConfig, RunRecorder, RunState, StopReason,
 };
 use rand::Rng;
 
@@ -74,5 +74,42 @@ fn narrow_peak_is_integrated_with_a_high_acceptance_rate() -> TestResult {
     // Prior proposals would be accepted at the rate of the remaining prior
     // volume, below 1e-3 at the end of this run.
     assert!(last_acceptance > 0.1, "acceptance rate {last_acceptance}");
+    Ok(())
+}
+
+/// A fitter whose low-acceptance rule applies after every iteration: the
+/// threshold is above any acceptance rate this problem can produce.
+fn fitter_with_rule_always_applying() -> Result<DpgmmProposalFitter, Box<dyn std::error::Error>> {
+    let rule = LowAcceptanceRule::below(0.999)?.with_rejection_quantile(0.3)?;
+    let config = DpgmmProposalConfig::default()
+        .with_mixture_config(DpgmmConfig::new(10)?)
+        .with_low_acceptance_rule(rule);
+    Ok(DpgmmProposalFitter::new(config))
+}
+
+#[test]
+fn resumed_run_with_the_low_acceptance_rule_equals_an_uninterrupted_run() -> TestResult {
+    let population = Population::new(120, 20)?;
+    let config = |max_iterations: u32| RunConfig::new(population, 31).with_max_iterations(max_iterations);
+    let sampler = |max_iterations: u32| -> Result<_, Box<dyn std::error::Error>> {
+        Ok(NestedSampler::new(
+            config(max_iterations),
+            NarrowGaussian,
+            fitter_with_rule_always_applying()?,
+        ))
+    };
+    let uninterrupted = sampler(8)?
+        .run(sampler(8)?.initialize()?, &mut NoRecorder)?
+        .into_state();
+
+    let directory = tempfile::tempdir()?;
+    let mut store = CheckpointStore::create(directory.path(), config(3))?;
+    sampler(3)?.run(sampler(3)?.initialize()?, &mut store)?;
+    let mut reopened = CheckpointStore::open(directory.path())?;
+    let restored = reopened.load_state()?;
+    assert!(restored.latest_acceptance_rate().is_some());
+    let resumed = sampler(8)?.run(restored, &mut reopened)?.into_state();
+
+    assert_eq!(resumed, uninterrupted);
     Ok(())
 }

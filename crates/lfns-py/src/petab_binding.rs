@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use ::lfns::RunConfig;
+use ::lfns::{LowAcceptanceRule, RunConfig};
 use ::lfns_model::{LikelihoodMethod, OdeSettings, ParticleFilter, PetabLikelihood, PetabProblem};
 use numpy::ndarray::{Array1, Array2};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
+use crate::proposal_choice::ProposalSettings;
 use crate::run_result::PyRunResult;
 use crate::run_settings::{Checkpointing, RunSettings};
 use crate::to_value_error;
@@ -266,7 +267,9 @@ impl PyPetabProblem {
         *, n_live, n_replaced, dynamics = "stochastic", n_particles = None, seed = 0,
         termination_tolerance = RunConfig::DEFAULT_TERMINATION_TOLERANCE, max_iterations = None,
         proposal = "dpgmm", rejection_quantile = ::lfns::DpgmmProposalConfig::DEFAULT_REJECTION_QUANTILE,
-        n_sweeps = ::dpgmm::DpgmmConfig::DEFAULT_N_SWEEPS, run_directory = None, resume = false, progress = false,
+        n_sweeps = ::dpgmm::DpgmmConfig::DEFAULT_N_SWEEPS, low_acceptance_threshold = None,
+        low_acceptance_quantile = LowAcceptanceRule::DEFAULT_REJECTION_QUANTILE,
+        run_directory = None, resume = false, progress = false,
     ))]
     // The many arguments are keyword-only in Python, where they form the
     // public configuration surface of a run.
@@ -284,12 +287,20 @@ impl PyPetabProblem {
         proposal: &str,
         rejection_quantile: f64,
         n_sweeps: u32,
+        low_acceptance_threshold: Option<f64>,
+        low_acceptance_quantile: f64,
         run_directory: Option<PathBuf>,
         resume: bool,
         progress: bool,
     ) -> PyResult<PyRunResult> {
         let settings = RunSettings::new((n_live, n_replaced), seed, termination_tolerance, max_iterations)?
-            .with_proposal(proposal, rejection_quantile, n_sweeps)?
+            .with_proposal(&ProposalSettings {
+                name: proposal,
+                rejection_quantile,
+                n_sweeps,
+                low_acceptance_threshold,
+                low_acceptance_quantile,
+            })?
             .with_checkpointing(Checkpointing {
                 run_directory,
                 resume,

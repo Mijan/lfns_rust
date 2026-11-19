@@ -18,11 +18,12 @@ mod run_settings;
 use std::path::PathBuf;
 
 use ::dpgmm::DpgmmConfig;
-use ::lfns::{DpgmmProposalConfig, RunConfig};
+use ::lfns::{DpgmmProposalConfig, LowAcceptanceRule, RunConfig};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::petab_binding::PyPetabProblem;
+use crate::proposal_choice::ProposalSettings;
 use crate::python_estimator::PythonEstimator;
 use crate::run_result::PyRunResult;
 use crate::run_settings::{Checkpointing, RunSettings};
@@ -41,7 +42,12 @@ pub(crate) fn to_value_error(error: impl std::fmt::Display) -> PyErr {
 /// An exception raised by it stops the run and is re-raised.
 ///
 /// `proposal` is `"dpgmm"` (uniform over the support of a DP-GMM fit to the
-/// live points) or `"prior"` (the whole unit cube). With `run_directory` the
+/// live points) or `"prior"` (the whole unit cube). The DP-GMM region keeps
+/// all but the fraction `rejection_quantile` of the fitted mixture. With
+/// `low_acceptance_threshold`, an iteration that follows one whose
+/// acceptance rate was below that threshold cuts off the fraction
+/// `low_acceptance_quantile` instead: a tighter region that accepts more
+/// often but covers less of the mixture's tails. With `run_directory` the
 /// run is checkpointed there after every iteration, and `resume=True`
 /// continues the run stored there. `progress=True` prints one line per
 /// iteration.
@@ -50,7 +56,9 @@ pub(crate) fn to_value_error(error: impl std::fmt::Display) -> PyErr {
     log_likelihood, n_parameters, *, n_live, n_replaced, seed = 0,
     termination_tolerance = RunConfig::DEFAULT_TERMINATION_TOLERANCE, max_iterations = None,
     proposal = "dpgmm", rejection_quantile = DpgmmProposalConfig::DEFAULT_REJECTION_QUANTILE,
-    n_sweeps = DpgmmConfig::DEFAULT_N_SWEEPS, run_directory = None, resume = false, progress = false,
+    n_sweeps = DpgmmConfig::DEFAULT_N_SWEEPS, low_acceptance_threshold = None,
+    low_acceptance_quantile = LowAcceptanceRule::DEFAULT_REJECTION_QUANTILE,
+    run_directory = None, resume = false, progress = false,
 ))]
 // The many arguments are keyword-only in Python, where they form the public
 // configuration surface of a run.
@@ -67,12 +75,20 @@ fn run(
     proposal: &str,
     rejection_quantile: f64,
     n_sweeps: u32,
+    low_acceptance_threshold: Option<f64>,
+    low_acceptance_quantile: f64,
     run_directory: Option<PathBuf>,
     resume: bool,
     progress: bool,
 ) -> PyResult<PyRunResult> {
     let settings = RunSettings::new((n_live, n_replaced), seed, termination_tolerance, max_iterations)?
-        .with_proposal(proposal, rejection_quantile, n_sweeps)?
+        .with_proposal(&ProposalSettings {
+            name: proposal,
+            rejection_quantile,
+            n_sweeps,
+            low_acceptance_threshold,
+            low_acceptance_quantile,
+        })?
         .with_checkpointing(Checkpointing {
             run_directory,
             resume,

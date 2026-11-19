@@ -19,12 +19,17 @@
 //! region that is small compared with the prior, `phi` is nearly constant
 //! over it and this is a uniform draw over the support of the mixture, as
 //! in the paper.
+//!
+//! The floor is a low quantile of the ratio over the mixture's own draws. A
+//! [`LowAcceptanceRule`] raises that quantile for an iteration that follows
+//! one with a poor acceptance rate.
 
 use dpgmm::{Dpgmm, DpgmmConfig, DpgmmError, GaussianMixture, Observations};
 use rand::{Rng, RngExt};
 
+use crate::low_acceptance_rule::LowAcceptanceRule;
 use crate::point_matrix::PointMatrix;
-use crate::proposal::{Proposal, ProposalFitter};
+use crate::proposal::{FitContext, Proposal, ProposalFitter};
 use crate::standard_normal::StandardNormal;
 
 /// Why a DP-GMM proposal could not be built.
@@ -50,6 +55,7 @@ pub enum DpgmmProposalError {
 pub struct DpgmmProposalConfig {
     mixture: DpgmmConfig,
     rejection_quantile: f64,
+    low_acceptance_rule: Option<LowAcceptanceRule>,
 }
 
 impl DpgmmProposalConfig {
@@ -80,10 +86,36 @@ impl DpgmmProposalConfig {
         Self { mixture, ..self }
     }
 
-    /// Quantile at which the floor is placed.
+    /// Returns a copy that places the floor at the quantile of `rule` for
+    /// every iteration that follows one with a poor acceptance rate.
+    #[must_use]
+    pub fn with_low_acceptance_rule(self, rule: LowAcceptanceRule) -> Self {
+        Self {
+            low_acceptance_rule: Some(rule),
+            ..self
+        }
+    }
+
+    /// Quantile at which the floor is placed, unless the low-acceptance
+    /// rule applies.
     #[must_use]
     pub fn rejection_quantile(&self) -> f64 {
         self.rejection_quantile
+    }
+
+    /// The rule for iterations that follow a poor acceptance rate, if any.
+    #[must_use]
+    pub fn low_acceptance_rule(&self) -> Option<LowAcceptanceRule> {
+        self.low_acceptance_rule
+    }
+
+    /// Quantile at which the floor of an iteration is placed, given the
+    /// acceptance rate of the iteration before it.
+    fn rejection_quantile_after(&self, previous_acceptance_rate: Option<f64>) -> f64 {
+        match self.low_acceptance_rule {
+            Some(rule) if rule.applies_after(previous_acceptance_rate) => rule.rejection_quantile(),
+            _ => self.rejection_quantile,
+        }
     }
 
     /// Settings of the mixture fit.
@@ -98,6 +130,7 @@ impl Default for DpgmmProposalConfig {
         Self {
             mixture: DpgmmConfig::default(),
             rejection_quantile: Self::DEFAULT_REJECTION_QUANTILE,
+            low_acceptance_rule: None,
         }
     }
 }
@@ -165,9 +198,13 @@ impl DpgmmProposalFitter {
         Self { config }
     }
 
-    /// Estimates the floor as a low quantile of the density ratio over the
-    /// mixture's own draws.
-    fn estimate_log_ratio_floor<R: Rng + ?Sized>(&self, mixture: &GaussianMixture, rng: &mut R) -> f64 {
+    /// Estimates the floor as the given quantile of the density ratio over
+    /// the mixture's own draws.
+    fn estimate_log_ratio_floor<R: Rng + ?Sized>(
+        mixture: &GaussianMixture,
+        rejection_quantile: f64,
+        rng: &mut R,
+    ) -> f64 {
         let mut point = vec![0.0; mixture.n_dimensions()];
         let mut log_ratios: Vec<f64> = (0..Self::N_QUANTILE_DRAWS)
             .map(|_| {
@@ -182,7 +219,7 @@ impl DpgmmProposalFitter {
             clippy::cast_sign_loss,
             clippy::cast_precision_loss
         )]
-        let rank = (self.config.rejection_quantile * log_ratios.len() as f64) as usize;
+        let rank = (rejection_quantile * log_ratios.len() as f64) as usize;
         *log_ratios.select_nth_unstable_by(rank, f64::total_cmp).1
     }
 }
@@ -194,6 +231,7 @@ impl ProposalFitter for DpgmmProposalFitter {
     fn fit<R: Rng + ?Sized>(
         &self,
         live_points: &PointMatrix,
+        context: FitContext,
         rng: &mut R,
     ) -> Result<DpgmmProposal, DpgmmProposalError> {
         let latent: Vec<f64> = live_points
@@ -203,10 +241,57 @@ impl ProposalFitter for DpgmmProposalFitter {
             .collect();
         let observations = Observations::from_rows(&latent, live_points.n_dimensions())?;
         let latent_mixture = Dpgmm::new(self.config.mixture).fit(&observations, rng)?;
-        let log_ratio_floor = self.estimate_log_ratio_floor(&latent_mixture, rng);
+        let rejection_quantile = self.config.rejection_quantile_after(context.previous_acceptance_rate());
+        let log_ratio_floor = Self::estimate_log_ratio_floor(&latent_mixture, rejection_quantile, rng);
         Ok(DpgmmProposal {
             latent_mixture,
             log_ratio_floor,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    use super::*;
+
+    /// Two hundred points spread over the middle of the unit square.
+    fn live_points() -> PointMatrix {
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let points: Vec<[f64; 2]> = (0..200)
+            .map(|_| [0.3 + 0.4 * rng.random::<f64>(), 0.3 + 0.4 * rng.random::<f64>()])
+            .collect();
+        PointMatrix::from_points(points.iter().map(<[f64; 2]>::as_slice), 2)
+    }
+
+    #[test]
+    fn low_acceptance_rule_tightens_the_region_only_after_a_poor_acceptance_rate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let rule = LowAcceptanceRule::below(0.001)?;
+        let fitter = DpgmmProposalFitter::new(DpgmmProposalConfig::default().with_low_acceptance_rule(rule));
+        // The same random stream gives the same mixture, so the floors
+        // differ only through the quantile.
+        let floor_after = |rate: Option<f64>| -> Result<f64, DpgmmProposalError> {
+            let mut rng = ChaCha8Rng::seed_from_u64(3);
+            let proposal = fitter.fit(&live_points(), FitContext::after(rate), &mut rng)?;
+            Ok(proposal.log_ratio_floor())
+        };
+        let (first, healthy, poor) = (floor_after(None)?, floor_after(Some(0.4))?, floor_after(Some(0.0002))?);
+        assert!((first - healthy).abs() < 1e-12, "{first} vs {healthy}");
+        assert!(poor > healthy, "floor {poor} after a poor rate is not above {healthy}");
+        Ok(())
+    }
+
+    #[test]
+    fn without_a_rule_the_acceptance_rate_does_not_matter() -> Result<(), DpgmmProposalError> {
+        let fitter = DpgmmProposalFitter::default();
+        let fit_after = |rate: Option<f64>| {
+            let mut rng = ChaCha8Rng::seed_from_u64(3);
+            fitter.fit(&live_points(), FitContext::after(rate), &mut rng)
+        };
+        assert_eq!(fit_after(Some(1e-9))?, fit_after(None)?);
+        Ok(())
     }
 }

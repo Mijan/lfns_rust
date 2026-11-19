@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use rand::{Rng, RngExt};
 
 use crate::point_matrix::PointMatrix;
-use crate::proposal::{Proposal, ProposalFitter};
+use crate::proposal::{FitContext, Proposal, ProposalFitter};
 
 /// Proposes uniformly from the whole unit cube.
 ///
@@ -31,7 +31,12 @@ impl ProposalFitter for PriorProposalFitter {
     type Proposal = PriorProposal;
     type Failure = Infallible;
 
-    fn fit<R: Rng + ?Sized>(&self, _live_points: &PointMatrix, _rng: &mut R) -> Result<PriorProposal, Infallible> {
+    fn fit<R: Rng + ?Sized>(
+        &self,
+        _live_points: &PointMatrix,
+        _context: FitContext,
+        _rng: &mut R,
+    ) -> Result<PriorProposal, Infallible> {
         Ok(PriorProposal)
     }
 }

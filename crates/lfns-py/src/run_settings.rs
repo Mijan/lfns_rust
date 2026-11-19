@@ -6,7 +6,7 @@ use ::lfns::{CheckpointStore, LikelihoodEstimator, NestedSampler, Population, Ru
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::proposal_choice::ProposalChoice;
+use crate::proposal_choice::{ProposalChoice, ProposalSettings};
 use crate::report_recorder::ReportRecorder;
 use crate::run_result::PyRunResult;
 use crate::to_value_error;
@@ -52,10 +52,11 @@ impl RunSettings {
         })
     }
 
-    /// Returns the settings with the proposal scheme named `proposal`.
-    pub(crate) fn with_proposal(self, proposal: &str, rejection_quantile: f64, n_sweeps: u32) -> PyResult<Self> {
+    /// Returns the settings with the proposal scheme described by
+    /// `proposal`.
+    pub(crate) fn with_proposal(self, proposal: &ProposalSettings<'_>) -> PyResult<Self> {
         Ok(Self {
-            fitter: ProposalChoice::parse(proposal, rejection_quantile, n_sweeps)?,
+            fitter: ProposalChoice::parse(proposal)?,
             ..self
         })
     }

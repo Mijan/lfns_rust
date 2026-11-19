@@ -5,7 +5,7 @@ use crate::lfns_error::LfnsError;
 use crate::likelihood_estimator::LikelihoodEstimator;
 use crate::particle_collector::{AcceptanceRule, Collection, ParticleCollector};
 use crate::prior_proposal::PriorProposal;
-use crate::proposal::{Proposal, ProposalFitter};
+use crate::proposal::{FitContext, Proposal, ProposalFitter};
 use crate::rng_streams::RngStreams;
 use crate::run_config::RunConfig;
 use crate::run_recorder::RunRecorder;
@@ -113,12 +113,13 @@ impl<L: LikelihoodEstimator, F: ProposalFitter> NestedSampler<L, F> {
 
     /// Performs one iteration.
     fn advance(&self, state: &mut RunState) -> Result<IterationReport, LfnsError> {
+        let context = FitContext::after(state.latest_acceptance_rate());
         let log_threshold = state.retire_lowest();
         let iteration = state.iteration();
         let mut fit_rng = RngStreams::new(self.config.seed()).fit_rng(iteration);
         let proposal = self
             .fitter
-            .fit(&state.live_coordinates(), &mut fit_rng)
+            .fit(&state.live_coordinates(), context, &mut fit_rng)
             .map_err(|failure| LfnsError::ProposalFit {
                 iteration,
                 source: Box::new(failure),
