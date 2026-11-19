@@ -1,0 +1,14 @@
+// Birth-death model of mRNA: constitutive transcription and first-order
+// degradation. Amounts are molecule counts, so each rate law is also the
+// propensity of its reaction in the stochastic model.
+model birth_death
+  compartment cell = 1;
+  substanceOnly species mRNA in cell;
+  mRNA = 0;
+
+  k = 1;        // transcription rate
+  gamma_mRNA = 0.1;  // degradation rate per molecule
+
+  transcription: -> mRNA; k;
+  degradation: mRNA -> ; gamma_mRNA * mRNA;
+end

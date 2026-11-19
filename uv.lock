@@ -8,6 +8,17 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "antimony"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/d8/06fef4b2cd53580cd0b79407e10e48c2bd7c1ef64e4925a7258cfeacbda1/antimony-3.3.0-py3-none-macosx_14_0_arm64.whl", hash = "sha256:1dc29293bfed3d71dac8ff2b008afc1d3b09fcfd2a6d007b9df7a6ac0da6c38b", size = 3684338, upload-time = "2026-10-28T21:22:20.71Z" },
+    { url = "https://files.pythonhosted.org/packages/11/b7/d41c445f7c6e0d7c584e555b11adc116afe39bfbe670241ac241f79d4677/antimony-3.3.0-py3-none-macosx_15_0_x86_64.whl", hash = "sha256:916839c2b85ac61656b0fa1ba928ec600b1fd2b5026271d1e8b7493da112fbf6", size = 3717197, upload-time = "2026-10-28T21:22:24.451Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/08/ebdbb1e15e5d2f308167d5be0bf251a21fedff79dd6d846a81bf393b5988/antimony-3.3.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:4bcfe5deb76d55f37d5b7a58e51e810724be0dedafc6b38514336f2756e5241a", size = 5638899, upload-time = "2026-10-28T21:22:28.098Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/53/c07a7d32861a78332ce8187a8701000d13523268a0e18c5f44363985e312/antimony-3.3.0-py3-none-win_amd64.whl", hash = "sha256:669733c5e5ec3673eeea433d6923e20a43e5e60e86e0f7c1b8d83dff8d5935dc", size = 2730286, upload-time = "2026-10-28T21:22:30.339Z" },
+]
+
+[[package]]
 name = "anyio"
 version = "4.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1126,6 +1137,7 @@ name = "lfns-notebooks"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "antimony" },
     { name = "dpgmm" },
     { name = "jupyterlab" },
     { name = "lfns" },
@@ -1136,6 +1148,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "antimony" },
     { name = "dpgmm", directory = "crates/dpgmm-py" },
     { name = "jupyterlab" },
     { name = "lfns", directory = "crates/lfns-py" },

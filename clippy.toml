@@ -1,2 +1,3 @@
 too-many-arguments-threshold = 5
 allow-unwrap-in-tests = true
+doc-valid-idents = ["PEtab", "MathML", "NumPy", ".."]

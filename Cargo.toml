@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/dpgmm", "crates/dpgmm-py", "crates/lfns", "crates/lfns-py"]
+members = ["crates/dpgmm", "crates/dpgmm-py", "crates/lfns", "crates/lfns-model", "crates/lfns-py"]
 
 [workspace.package]
 version = "0.1.0"

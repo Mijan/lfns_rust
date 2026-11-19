@@ -1,45 +1,35 @@
 //! Python bindings of the `lfns` crate, for notebooks and analysis scripts.
 //!
 //! The module exposes `run`, which performs a likelihood-free nested
-//! sampling run with a likelihood written in Python, and the `RunResult` it
-//! returns. Parameters live in the unit cube (prior-CDF space).
+//! sampling run with a likelihood written in Python, `PetabProblem`, which
+//! runs a PEtab problem whose model is simulated in Rust, and the
+//! `RunResult` both return. Parameters live in the unit cube (prior-CDF space).
 
 // PyO3 hands extracted arguments to a function by value.
 #![allow(clippy::needless_pass_by_value)]
 
+mod petab_binding;
 mod proposal_choice;
 mod python_estimator;
 mod report_recorder;
 mod run_result;
+mod run_settings;
 
 use std::path::PathBuf;
 
 use ::dpgmm::DpgmmConfig;
-use ::lfns::{CheckpointStore, DpgmmProposalConfig, NestedSampler, Population, RunConfig};
+use ::lfns::{DpgmmProposalConfig, NestedSampler, RunConfig};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::proposal_choice::ProposalChoice;
+use crate::petab_binding::PyPetabProblem;
 use crate::python_estimator::PythonEstimator;
-use crate::report_recorder::ReportRecorder;
 use crate::run_result::PyRunResult;
+use crate::run_settings::RunSettings;
 
 /// Turns a Rust error into a Python `ValueError` carrying its message.
-fn to_value_error(error: impl std::fmt::Display) -> PyErr {
+pub(crate) fn to_value_error(error: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(error.to_string())
-}
-
-fn build_config(
-    population: (u32, u32),
-    seed: u64,
-    termination_tolerance: f64,
-    max_iterations: Option<u32>,
-) -> PyResult<RunConfig> {
-    let population = Population::new(population.0, population.1).map_err(to_value_error)?;
-    let config = RunConfig::new(population, seed)
-        .with_termination_tolerance(termination_tolerance)
-        .map_err(to_value_error)?;
-    Ok(max_iterations.map_or(config, |limit| config.with_max_iterations(limit)))
 }
 
 /// Runs likelihood-free nested sampling.
@@ -77,12 +67,10 @@ fn run(
     n_sweeps: u32,
     run_directory: Option<PathBuf>,
 ) -> PyResult<PyRunResult> {
-    let config = build_config((n_live, n_replaced), seed, termination_tolerance, max_iterations)?;
-    let fitter = ProposalChoice::parse(proposal, rejection_quantile, n_sweeps)?;
-    let store = run_directory
-        .map(|directory| CheckpointStore::create(directory, config))
-        .transpose();
-    let mut recorder = ReportRecorder::new(store.map_err(to_value_error)?);
+    let settings = RunSettings::new((n_live, n_replaced), seed, termination_tolerance, max_iterations)?
+        .with_proposal(proposal, rejection_quantile, n_sweeps)?
+        .with_run_directory(run_directory)?;
+    let (config, fitter, mut recorder) = settings.into_parts();
     let (estimator, first_exception) = PythonEstimator::new(log_likelihood, n_parameters);
     let sampler = NestedSampler::new(config, estimator, fitter);
 
@@ -109,6 +97,7 @@ fn run(
 #[pymodule]
 fn lfns(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRunResult>()?;
+    module.add_class::<PyPetabProblem>()?;
     module.add_function(wrap_pyfunction!(run, module)?)?;
     Ok(())
 }

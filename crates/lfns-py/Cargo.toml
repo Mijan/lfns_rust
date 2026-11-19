@@ -19,9 +19,11 @@ doc = false
 [dependencies]
 dpgmm = { path = "../dpgmm" }
 lfns = { path = "../lfns" }
+lfns-model = { version = "0.1.0", path = "../lfns-model" }
 numpy = "0.30"
 pyo3 = { version = "0.30", features = ["extension-module"] }
 rand = "0.10"
+rand_chacha = "0.10"
 thiserror = "2"
 
 [lints]

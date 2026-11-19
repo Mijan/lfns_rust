@@ -1,0 +1,24 @@
+[package]
+name = "lfns-model"
+description = "SBML and PEtab models for likelihood-free nested sampling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+csv = "1.4.0"
+diffsol = "0.20.0"
+lfns = { path = "../lfns" }
+rand = "0.10"
+rand_distr = "0.6"
+roxmltree = "0.21.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_yaml_ng = "0.10.0"
+thiserror = "2"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+rand_chacha = "0.10"
