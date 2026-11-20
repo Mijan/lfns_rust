@@ -23,25 +23,30 @@ pub trait Proposal: Sync {
 /// What the sampler tells a fitter about the run, besides the live
 /// particles.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FitContext {
-    previous_acceptance_rate: Option<f64>,
+pub struct FitContext<'a> {
+    acceptance_rates: &'a [f64],
 }
 
-impl FitContext {
-    /// The context of an iteration that follows one with the given
-    /// acceptance rate; `None` for the first iteration, which follows none.
+impl<'a> FitContext<'a> {
+    /// The context of the iteration that follows those with the given
+    /// acceptance rates, oldest first; empty for the first iteration.
     #[must_use]
-    pub fn after(previous_acceptance_rate: Option<f64>) -> Self {
-        Self {
-            previous_acceptance_rate,
-        }
+    pub fn after(acceptance_rates: &'a [f64]) -> Self {
+        Self { acceptance_rates }
+    }
+
+    /// Fraction of proposals accepted in each earlier iteration, oldest
+    /// first.
+    #[must_use]
+    pub fn acceptance_rates(&self) -> &'a [f64] {
+        self.acceptance_rates
     }
 
     /// Fraction of the previous iteration's proposals that were accepted;
     /// `None` in the first iteration.
     #[must_use]
     pub fn previous_acceptance_rate(&self) -> Option<f64> {
-        self.previous_acceptance_rate
+        self.acceptance_rates.last().copied()
     }
 }
 
@@ -66,7 +71,7 @@ pub trait ProposalFitter {
     fn fit<R: Rng + ?Sized>(
         &self,
         live_points: &PointMatrix,
-        context: FitContext,
+        context: FitContext<'_>,
         rng: &mut R,
     ) -> Result<Self::Proposal, Self::Failure>;
 }

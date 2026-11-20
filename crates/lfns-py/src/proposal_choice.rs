@@ -2,7 +2,8 @@
 
 use ::dpgmm::DpgmmConfig;
 use ::lfns::{
-    DpgmmProposal, DpgmmProposalConfig, DpgmmProposalError, DpgmmProposalFitter, FitContext, LowAcceptanceRule,
+    DpgmmProposal, DpgmmProposalConfig, DpgmmProposalError, DpgmmProposalFitter, FitContext, HeldOutFloor,
+    LowAcceptanceRule,
     PointMatrix, PriorProposal, Proposal, ProposalFitter,
 };
 use pyo3::exceptions::PyValueError;
@@ -23,6 +24,15 @@ pub(crate) struct ProposalSettings<'a> {
     /// Fraction of the mixture's own draws below the floor after a poor
     /// acceptance rate.
     pub(crate) low_acceptance_quantile: f64,
+    /// Acceptance rate from which the wide region is used again; `None`
+    /// means the low-acceptance threshold itself.
+    pub(crate) recovery_threshold: Option<f64>,
+    /// Share of the constrained prior the region may give up, measured on
+    /// live particles held out of the fit; `None` places the floor on the
+    /// mixture's own draws at `rejection_quantile` instead.
+    pub(crate) level_set_share_lost: Option<f64>,
+    /// Fraction of the live particles held out of the fit.
+    pub(crate) held_out_fraction: f64,
 }
 
 /// A proposal scheme: fits a [`ChosenProposal`] each iteration.
@@ -50,12 +60,20 @@ impl ProposalChoice {
         }
     }
 
-    /// The settings of the DP-GMM proposal, with the low-acceptance rule if
-    /// a threshold was given.
+    /// The settings of the DP-GMM proposal: the held-out floor if a share
+    /// was given, else the quantile floor with the low-acceptance rule if a
+    /// threshold was given.
     fn dpgmm_config(settings: &ProposalSettings<'_>) -> PyResult<DpgmmProposalConfig> {
         let mixture = DpgmmConfig::new(settings.n_sweeps).map_err(|error| PyValueError::new_err(error.to_string()))?;
-        let config = DpgmmProposalConfig::default()
-            .with_mixture_config(mixture)
+        let config = DpgmmProposalConfig::default().with_mixture_config(mixture);
+        if let Some(share) = settings.level_set_share_lost {
+            let floor = HeldOutFloor::giving_up(share)
+                .and_then(|floor| floor.with_held_out_fraction(settings.held_out_fraction))
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
+            return Ok(config.with_held_out_floor(floor));
+        }
+        let config = config
+            .without_held_out_floor()
             .with_rejection_quantile(settings.rejection_quantile)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let Some(threshold) = settings.low_acceptance_threshold else {
@@ -63,6 +81,7 @@ impl ProposalChoice {
         };
         let rule = LowAcceptanceRule::below(threshold)
             .and_then(|rule| rule.with_rejection_quantile(settings.low_acceptance_quantile))
+            .and_then(|rule| rule.with_recovery_threshold(settings.recovery_threshold.unwrap_or(threshold)))
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         Ok(config.with_low_acceptance_rule(rule))
     }
@@ -97,7 +116,7 @@ impl ProposalFitter for ProposalChoice {
     fn fit<R: Rng + ?Sized>(
         &self,
         live_points: &PointMatrix,
-        context: FitContext,
+        context: FitContext<'_>,
         rng: &mut R,
     ) -> Result<ChosenProposal, DpgmmProposalError> {
         match self {

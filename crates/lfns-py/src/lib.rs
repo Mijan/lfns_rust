@@ -18,7 +18,7 @@ mod run_settings;
 use std::path::PathBuf;
 
 use ::dpgmm::DpgmmConfig;
-use ::lfns::{DpgmmProposalConfig, LowAcceptanceRule, RunConfig};
+use ::lfns::{DpgmmProposalConfig, HeldOutFloor, LowAcceptanceRule, RunConfig};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -46,7 +46,10 @@ pub(crate) fn to_value_error(error: impl std::fmt::Display) -> PyErr {
 /// all but the fraction `rejection_quantile` of the fitted mixture. An
 /// iteration that follows one whose acceptance rate was below
 /// `low_acceptance_threshold` (`None` switches this off) cuts off the fraction
-/// `low_acceptance_quantile` instead: a tighter region that accepts more
+/// `low_acceptance_quantile` instead, and with `recovery_threshold` keeps
+/// doing so until an iteration's acceptance rate reaches that value (by
+/// default it switches back as soon as the previous iteration was not
+/// poor): a tighter region that accepts more
 /// often but covers less of the mixture's tails. With `run_directory` the
 /// run is checkpointed there after every iteration, and `resume=True`
 /// continues the run stored there. `progress=True` prints one line per
@@ -58,6 +61,9 @@ pub(crate) fn to_value_error(error: impl std::fmt::Display) -> PyErr {
     proposal = "dpgmm", rejection_quantile = DpgmmProposalConfig::DEFAULT_REJECTION_QUANTILE,
     n_sweeps = DpgmmConfig::DEFAULT_N_SWEEPS, low_acceptance_threshold = Some(LowAcceptanceRule::DEFAULT_ACCEPTANCE_THRESHOLD),
     low_acceptance_quantile = LowAcceptanceRule::DEFAULT_REJECTION_QUANTILE,
+    recovery_threshold = None,
+    level_set_share_lost = Some(HeldOutFloor::DEFAULT_LEVEL_SET_SHARE),
+    held_out_fraction = HeldOutFloor::DEFAULT_HELD_OUT_FRACTION,
     run_directory = None, resume = false, progress = false,
 ))]
 // The many arguments are keyword-only in Python, where they form the public
@@ -77,6 +83,9 @@ fn run(
     n_sweeps: u32,
     low_acceptance_threshold: Option<f64>,
     low_acceptance_quantile: f64,
+    recovery_threshold: Option<f64>,
+    level_set_share_lost: Option<f64>,
+    held_out_fraction: f64,
     run_directory: Option<PathBuf>,
     resume: bool,
     progress: bool,
@@ -88,6 +97,9 @@ fn run(
             n_sweeps,
             low_acceptance_threshold,
             low_acceptance_quantile,
+            recovery_threshold,
+            level_set_share_lost,
+            held_out_fraction,
         })?
         .with_checkpointing(Checkpointing {
             run_directory,

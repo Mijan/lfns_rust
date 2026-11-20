@@ -20,13 +20,18 @@
 //! over it and this is a uniform draw over the support of the mixture, as
 //! in the paper.
 //!
-//! The floor is a low quantile of the ratio over the mixture's own draws. A
-//! [`LowAcceptanceRule`] raises that quantile for an iteration that follows
-//! one with a poor acceptance rate.
+//! By default the floor is placed on live particles kept out of the fit, so
+//! that a stated share of the constrained prior lies below it (see
+//! [`HeldOutFloor`]). Without a held-out floor it is a low quantile of the
+//! ratio over the mixture's own draws, and a [`LowAcceptanceRule`] raises
+//! that quantile for an iteration that follows one with a poor acceptance
+//! rate.
 
 use dpgmm::{Dpgmm, DpgmmConfig, DpgmmError, GaussianMixture, Observations};
+use rand::seq::SliceRandom;
 use rand::{Rng, RngExt};
 
+use crate::held_out_floor::HeldOutFloor;
 use crate::low_acceptance_rule::LowAcceptanceRule;
 use crate::point_matrix::PointMatrix;
 use crate::proposal::{FitContext, Proposal, ProposalFitter};
@@ -45,6 +50,17 @@ pub enum DpgmmProposalError {
         value: f64,
     },
 
+    /// There are too few live particles to keep some out of the fit.
+    #[error(
+        "{n_points} live particle(s) cannot be split into particles for the mixture fit and particles \
+         held out of it. Use at least two live particles, or switch the held-out floor off with \
+         `without_held_out_floor()`."
+    )]
+    TooFewParticlesToHoldOut {
+        /// Number of live particles handed to the fitter.
+        n_points: usize,
+    },
+
     /// The mixture could not be fitted to the live particles.
     #[error("fitting the mixture to the live particles failed: {0}")]
     Fit(#[from] DpgmmError),
@@ -56,15 +72,45 @@ pub struct DpgmmProposalConfig {
     mixture: DpgmmConfig,
     rejection_quantile: f64,
     low_acceptance_rule: Option<LowAcceptanceRule>,
+    held_out_floor: Option<HeldOutFloor>,
 }
 
 impl DpgmmProposalConfig {
     /// Default fraction of the mixture's own draws that lie below the floor.
     pub const DEFAULT_REJECTION_QUANTILE: f64 = 0.001;
 
+    /// Returns a copy that places the floor on live particles kept out of
+    /// the mixture fit. The rejection quantile and the low-acceptance rule
+    /// are then not used.
+    #[must_use]
+    pub fn with_held_out_floor(self, floor: HeldOutFloor) -> Self {
+        Self {
+            held_out_floor: Some(floor),
+            ..self
+        }
+    }
+
+    /// Returns a copy that fits the mixture to every live particle and
+    /// places the floor at [`Self::rejection_quantile`] of the mixture's
+    /// own draws, subject to the low-acceptance rule.
+    #[must_use]
+    pub fn without_held_out_floor(self) -> Self {
+        Self {
+            held_out_floor: None,
+            ..self
+        }
+    }
+
+    /// The floor placed on held-out live particles, if one is used.
+    #[must_use]
+    pub fn held_out_floor(&self) -> Option<HeldOutFloor> {
+        self.held_out_floor
+    }
+
     /// Returns a copy that places the floor at the given quantile of the
-    /// density ratio over the mixture's own draws. A smaller quantile covers
-    /// more of the tails at the price of a lower acceptance rate.
+    /// density ratio over the mixture's own draws, when no held-out floor
+    /// is used. A smaller quantile covers more of the tails at the price of
+    /// a lower acceptance rate.
     ///
     /// # Errors
     ///
@@ -121,9 +167,9 @@ impl DpgmmProposalConfig {
 
     /// Quantile at which the floor of an iteration is placed, given the
     /// acceptance rate of the iteration before it.
-    fn rejection_quantile_after(&self, previous_acceptance_rate: Option<f64>) -> f64 {
+    fn rejection_quantile_after(&self, acceptance_rates: &[f64]) -> f64 {
         match self.low_acceptance_rule {
-            Some(rule) if rule.applies_after(previous_acceptance_rate) => rule.rejection_quantile(),
+            Some(rule) if rule.applies_after(acceptance_rates) => rule.rejection_quantile(),
             _ => self.rejection_quantile,
         }
     }
@@ -141,6 +187,7 @@ impl Default for DpgmmProposalConfig {
             mixture: DpgmmConfig::default(),
             rejection_quantile: Self::DEFAULT_REJECTION_QUANTILE,
             low_acceptance_rule: Some(LowAcceptanceRule::default()),
+            held_out_floor: Some(HeldOutFloor::default()),
         }
     }
 }
@@ -221,12 +268,17 @@ impl DpgmmProposalFitter {
         rng: &mut R,
     ) -> f64 {
         let mut point = vec![0.0; mixture.n_dimensions()];
-        let mut log_ratios: Vec<f64> = (0..Self::N_QUANTILE_DRAWS)
+        let log_ratios: Vec<f64> = (0..Self::N_QUANTILE_DRAWS)
             .map(|_| {
                 mixture.sample(rng, &mut point);
                 DpgmmProposal::log_ratio(mixture, &point)
             })
             .collect();
+        Self::quantile(log_ratios, rejection_quantile)
+    }
+
+    /// The value below which the given share of `values` lies.
+    fn quantile(mut values: Vec<f64>, share: f64) -> f64 {
         // The product lies in [0, len), so the conversion neither truncates
         // meaningfully nor loses a sign.
         #[allow(
@@ -234,8 +286,68 @@ impl DpgmmProposalFitter {
             clippy::cast_sign_loss,
             clippy::cast_precision_loss
         )]
-        let rank = (rejection_quantile * log_ratios.len() as f64) as usize;
-        *log_ratios.select_nth_unstable_by(rank, f64::total_cmp).1
+        let rank = ((share * values.len() as f64) as usize).min(values.len().saturating_sub(1));
+        *values.select_nth_unstable_by(rank, f64::total_cmp).1
+    }
+
+    /// The live particles in latent space, point after point.
+    fn latent_points(live_points: &PointMatrix) -> Vec<f64> {
+        live_points
+            .as_flat_slice()
+            .iter()
+            .map(|u| StandardNormal::quantile(*u))
+            .collect()
+    }
+
+    /// Fits the mixture to every live particle and places the floor on the
+    /// mixture's own draws.
+    fn fit_on_all<R: Rng + ?Sized>(
+        &self,
+        live_points: &PointMatrix,
+        context: FitContext<'_>,
+        rng: &mut R,
+    ) -> Result<DpgmmProposal, DpgmmProposalError> {
+        let latent = Self::latent_points(live_points);
+        let observations = Observations::from_rows(&latent, live_points.n_dimensions())?;
+        let latent_mixture = Dpgmm::new(self.config.mixture).fit(&observations, rng)?;
+        let rejection_quantile = self.config.rejection_quantile_after(context.acceptance_rates());
+        let log_ratio_floor = Self::estimate_log_ratio_floor(&latent_mixture, rejection_quantile, rng);
+        Ok(DpgmmProposal {
+            latent_mixture,
+            log_ratio_floor,
+            rejection_quantile,
+        })
+    }
+
+    /// Fits the mixture to a random part of the live particles and places
+    /// the floor on the others.
+    fn fit_with_held_out<R: Rng + ?Sized>(
+        &self,
+        live_points: &PointMatrix,
+        floor: HeldOutFloor,
+        rng: &mut R,
+    ) -> Result<DpgmmProposal, DpgmmProposalError> {
+        let (n_points, n_dimensions) = (live_points.n_points(), live_points.n_dimensions());
+        if n_points < 2 {
+            return Err(DpgmmProposalError::TooFewParticlesToHoldOut { n_points });
+        }
+        let latent = Self::latent_points(live_points);
+        let mut order: Vec<usize> = (0..n_points).collect();
+        order.shuffle(rng);
+        let (held_out, fitted) = order.split_at(floor.n_held_out(n_points));
+        let point = |index: &usize| &latent[index * n_dimensions..(index + 1) * n_dimensions];
+        let fitted_points: Vec<f64> = fitted.iter().flat_map(|index| point(index).iter().copied()).collect();
+        let observations = Observations::from_rows(&fitted_points, n_dimensions)?;
+        let latent_mixture = Dpgmm::new(self.config.mixture).fit(&observations, rng)?;
+        let held_out_ratios: Vec<f64> = held_out
+            .iter()
+            .map(|index| DpgmmProposal::log_ratio(&latent_mixture, point(index)))
+            .collect();
+        Ok(DpgmmProposal {
+            log_ratio_floor: Self::quantile(held_out_ratios, floor.level_set_share()),
+            latent_mixture,
+            rejection_quantile: floor.level_set_share(),
+        })
     }
 }
 
@@ -246,23 +358,13 @@ impl ProposalFitter for DpgmmProposalFitter {
     fn fit<R: Rng + ?Sized>(
         &self,
         live_points: &PointMatrix,
-        context: FitContext,
+        context: FitContext<'_>,
         rng: &mut R,
     ) -> Result<DpgmmProposal, DpgmmProposalError> {
-        let latent: Vec<f64> = live_points
-            .as_flat_slice()
-            .iter()
-            .map(|u| StandardNormal::quantile(*u))
-            .collect();
-        let observations = Observations::from_rows(&latent, live_points.n_dimensions())?;
-        let latent_mixture = Dpgmm::new(self.config.mixture).fit(&observations, rng)?;
-        let rejection_quantile = self.config.rejection_quantile_after(context.previous_acceptance_rate());
-        let log_ratio_floor = Self::estimate_log_ratio_floor(&latent_mixture, rejection_quantile, rng);
-        Ok(DpgmmProposal {
-            latent_mixture,
-            log_ratio_floor,
-            rejection_quantile,
-        })
+        match self.config.held_out_floor {
+            Some(floor) => self.fit_with_held_out(live_points, floor, rng),
+            None => self.fit_on_all(live_points, context, rng),
+        }
     }
 }
 
@@ -275,42 +377,80 @@ mod tests {
 
     /// Two hundred points spread over the middle of the unit square.
     fn live_points() -> PointMatrix {
-        let mut rng = ChaCha8Rng::seed_from_u64(1);
-        let points: Vec<[f64; 2]> = (0..200)
+        square_points(200, 1)
+    }
+
+    /// Points uniform over the middle of the unit square.
+    fn square_points(n_points: usize, seed: u64) -> PointMatrix {
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        let points: Vec<[f64; 2]> = (0..n_points)
             .map(|_| [0.3 + 0.4 * rng.random::<f64>(), 0.3 + 0.4 * rng.random::<f64>()])
             .collect();
         PointMatrix::from_points(points.iter().map(<[f64; 2]>::as_slice), 2)
     }
 
     #[test]
+    fn held_out_floor_gives_up_about_its_share_of_the_region() -> Result<(), Box<dyn std::error::Error>> {
+        let share = 0.1;
+        let config = DpgmmProposalConfig::default().with_held_out_floor(HeldOutFloor::giving_up(share)?);
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let proposal = DpgmmProposalFitter::new(config).fit(&square_points(2000, 1), FitContext::after(&[]), &mut rng)?;
+        // Fresh points of the same region, which the fitter never saw.
+        let fresh = square_points(4000, 2);
+        let below = fresh
+            .points()
+            .filter(|point| {
+                let latent: Vec<f64> = point.iter().map(|u| StandardNormal::quantile(*u)).collect();
+                DpgmmProposal::log_ratio(proposal.latent_mixture(), &latent) < proposal.log_ratio_floor()
+            })
+            .count();
+        #[allow(clippy::cast_precision_loss)]
+        let lost = below as f64 / fresh.n_points() as f64;
+        // 400 held-out points place the 10 % quantile within about 1.5 % (one standard error).
+        assert!((0.04..0.16).contains(&lost), "lost {lost}, asked for {share}");
+        assert_eq!(proposal.rejection_quantile(), Some(share));
+        Ok(())
+    }
+
+    #[test]
+    fn held_out_floor_needs_two_particles() {
+        let fitter = DpgmmProposalFitter::default();
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let outcome = fitter.fit(&square_points(1, 1), FitContext::after(&[]), &mut rng);
+        assert!(matches!(outcome, Err(DpgmmProposalError::TooFewParticlesToHoldOut { n_points: 1 })));
+    }
+
+    #[test]
     fn low_acceptance_rule_tightens_the_region_only_after_a_poor_acceptance_rate()
     -> Result<(), Box<dyn std::error::Error>> {
         let rule = LowAcceptanceRule::below(0.001)?;
-        let fitter = DpgmmProposalFitter::new(DpgmmProposalConfig::default().with_low_acceptance_rule(rule));
+        let config = DpgmmProposalConfig::default().without_held_out_floor();
+        let fitter = DpgmmProposalFitter::new(config.with_low_acceptance_rule(rule));
         // The same random stream gives the same mixture, so the floors
         // differ only through the quantile.
-        let floor_after = |rate: Option<f64>| -> Result<f64, DpgmmProposalError> {
+        let floor_after = |rates: &[f64]| -> Result<f64, DpgmmProposalError> {
             let mut rng = ChaCha8Rng::seed_from_u64(3);
-            let proposal = fitter.fit(&live_points(), FitContext::after(rate), &mut rng)?;
+            let proposal = fitter.fit(&live_points(), FitContext::after(rates), &mut rng)?;
             Ok(proposal.log_ratio_floor())
         };
-        let (first, healthy, poor) = (floor_after(None)?, floor_after(Some(0.4))?, floor_after(Some(0.0002))?);
+        let (first, healthy, poor) = (floor_after(&[])?, floor_after(&[0.4])?, floor_after(&[0.4, 0.0002])?);
         assert!((first - healthy).abs() < 1e-12, "{first} vs {healthy}");
         assert!(poor > healthy, "floor {poor} after a poor rate is not above {healthy}");
         let mut rng = ChaCha8Rng::seed_from_u64(3);
-        let tightened = fitter.fit(&live_points(), FitContext::after(Some(0.0002)), &mut rng)?;
+        let tightened = fitter.fit(&live_points(), FitContext::after(&[0.0002]), &mut rng)?;
         assert_eq!(tightened.rejection_quantile(), Some(rule.rejection_quantile()));
         Ok(())
     }
 
     #[test]
     fn without_a_rule_the_acceptance_rate_does_not_matter() -> Result<(), DpgmmProposalError> {
-        let fitter = DpgmmProposalFitter::new(DpgmmProposalConfig::default().without_low_acceptance_rule());
-        let fit_after = |rate: Option<f64>| {
+        let config = DpgmmProposalConfig::default().without_held_out_floor();
+        let fitter = DpgmmProposalFitter::new(config.without_low_acceptance_rule());
+        let fit_after = |rates: &[f64]| {
             let mut rng = ChaCha8Rng::seed_from_u64(3);
-            fitter.fit(&live_points(), FitContext::after(rate), &mut rng)
+            fitter.fit(&live_points(), FitContext::after(rates), &mut rng)
         };
-        assert_eq!(fit_after(Some(1e-9))?, fit_after(None)?);
+        assert_eq!(fit_after(&[1e-9])?, fit_after(&[])?);
         Ok(())
     }
 }

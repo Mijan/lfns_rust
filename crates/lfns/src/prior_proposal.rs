@@ -38,7 +38,7 @@ impl ProposalFitter for PriorProposalFitter {
     fn fit<R: Rng + ?Sized>(
         &self,
         _live_points: &PointMatrix,
-        _context: FitContext,
+        _context: FitContext<'_>,
         _rng: &mut R,
     ) -> Result<PriorProposal, Infallible> {
         Ok(PriorProposal)

@@ -113,13 +113,16 @@ impl<L: LikelihoodEstimator, F: ProposalFitter> NestedSampler<L, F> {
 
     /// Performs one iteration.
     fn advance(&self, state: &mut RunState) -> Result<IterationReport, LfnsError> {
-        let context = FitContext::after(state.latest_acceptance_rate());
         let log_threshold = state.retire_lowest();
         let iteration = state.iteration();
         let mut fit_rng = RngStreams::new(self.config.seed()).fit_rng(iteration);
         let proposal = self
             .fitter
-            .fit(&state.live_coordinates(), context, &mut fit_rng)
+            .fit(
+                &state.live_coordinates(),
+                FitContext::after(state.acceptance_rates()),
+                &mut fit_rng,
+            )
             .map_err(|failure| LfnsError::ProposalFit {
                 iteration,
                 source: Box::new(failure),

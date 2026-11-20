@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use ::lfns::{LowAcceptanceRule, RunConfig};
+use ::lfns::{HeldOutFloor, LowAcceptanceRule, RunConfig};
 use ::lfns_model::{LikelihoodMethod, OdeSettings, ParticleFilter, PetabLikelihood, PetabProblem};
 use numpy::ndarray::{Array1, Array2};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -269,6 +269,9 @@ impl PyPetabProblem {
         proposal = "dpgmm", rejection_quantile = ::lfns::DpgmmProposalConfig::DEFAULT_REJECTION_QUANTILE,
         n_sweeps = ::dpgmm::DpgmmConfig::DEFAULT_N_SWEEPS, low_acceptance_threshold = Some(LowAcceptanceRule::DEFAULT_ACCEPTANCE_THRESHOLD),
         low_acceptance_quantile = LowAcceptanceRule::DEFAULT_REJECTION_QUANTILE,
+        recovery_threshold = None,
+        level_set_share_lost = Some(HeldOutFloor::DEFAULT_LEVEL_SET_SHARE),
+        held_out_fraction = HeldOutFloor::DEFAULT_HELD_OUT_FRACTION,
         run_directory = None, resume = false, progress = false,
     ))]
     // The many arguments are keyword-only in Python, where they form the
@@ -289,6 +292,9 @@ impl PyPetabProblem {
         n_sweeps: u32,
         low_acceptance_threshold: Option<f64>,
         low_acceptance_quantile: f64,
+        recovery_threshold: Option<f64>,
+        level_set_share_lost: Option<f64>,
+        held_out_fraction: f64,
         run_directory: Option<PathBuf>,
         resume: bool,
         progress: bool,
@@ -300,6 +306,9 @@ impl PyPetabProblem {
                 n_sweeps,
                 low_acceptance_threshold,
                 low_acceptance_quantile,
+                recovery_threshold,
+                level_set_share_lost,
+                held_out_fraction,
             })?
             .with_checkpointing(Checkpointing {
                 run_directory,

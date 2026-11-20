@@ -50,12 +50,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tolerance", type=float, default=0.01, help="termination tolerance")
     parser.add_argument("--max-iterations", type=int, default=None, help="stop after this many iterations")
     parser.add_argument("--n-sweeps", type=int, default=200, help="Gibbs sweeps of each DP-GMM fit")
-    parser.add_argument("--rejection-quantile", type=float, default=0.001, help="quantile of the proposal floor")
+    parser.add_argument("--level-set-share-lost", type=float, default=0.01,
+                        help="share of the level set the proposal region may give up, measured on live points "
+                             "held out of the mixture fit; 0 places the floor on the mixture's own draws "
+                             "instead (--rejection-quantile and the low-acceptance rule)")
+    parser.add_argument("--held-out-fraction", type=float, default=0.2,
+                        help="fraction of the live points held out of the mixture fit to place the floor")
+    parser.add_argument("--rejection-quantile", type=float, default=0.001,
+                        help="quantile of the proposal floor over the mixture's own draws; used only with "
+                             "--level-set-share-lost 0")
     parser.add_argument("--low-acceptance-threshold", type=float, default=0.001,
                         help="acceptance rate below which the next iteration uses --low-acceptance-quantile; "
                              "0 switches the rule off")
     parser.add_argument("--low-acceptance-quantile", type=float, default=0.2,
                         help="quantile of the proposal floor after a poor acceptance rate")
+    parser.add_argument("--recovery-threshold", type=float, default=None,
+                        help="acceptance rate from which the normal quantile is used again; by default the "
+                             "low-acceptance threshold, so the rule looks at the previous iteration alone")
     return parser.parse_args()
 
 
@@ -105,6 +116,9 @@ def main() -> None:
         rejection_quantile=args.rejection_quantile,
         low_acceptance_threshold=args.low_acceptance_threshold or None,
         low_acceptance_quantile=args.low_acceptance_quantile,
+        recovery_threshold=args.recovery_threshold,
+        level_set_share_lost=args.level_set_share_lost or None,
+        held_out_fraction=args.held_out_fraction,
         run_directory=str(args.run_directory),
         resume=args.resume,
         progress=True,

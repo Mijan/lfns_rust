@@ -77,10 +77,13 @@ fn narrow_peak_is_integrated_with_a_high_acceptance_rate() -> TestResult {
     Ok(())
 }
 
-/// A fitter whose low-acceptance rule applies after every iteration: the
-/// threshold is above any acceptance rate this problem can produce.
-fn fitter_with_rule_always_applying() -> Result<DpgmmProposalFitter, Box<dyn std::error::Error>> {
-    let rule = LowAcceptanceRule::below(0.999)?.with_rejection_quantile(0.3)?;
+/// A fitter whose low-acceptance rule is switched on and off by this
+/// problem's acceptance rates, with a recovery threshold above the acceptance
+/// threshold, so which region an iteration uses depends on the history.
+fn fitter_with_history_dependent_rule() -> Result<DpgmmProposalFitter, Box<dyn std::error::Error>> {
+    let rule = LowAcceptanceRule::below(0.6)?
+        .with_rejection_quantile(0.3)?
+        .with_recovery_threshold(0.75)?;
     let config = DpgmmProposalConfig::default()
         .with_mixture_config(DpgmmConfig::new(10)?)
         .with_low_acceptance_rule(rule);
@@ -95,7 +98,7 @@ fn resumed_run_with_the_low_acceptance_rule_equals_an_uninterrupted_run() -> Tes
         Ok(NestedSampler::new(
             config(max_iterations),
             NarrowGaussian,
-            fitter_with_rule_always_applying()?,
+            fitter_with_history_dependent_rule()?,
         ))
     };
     let uninterrupted = sampler(8)?

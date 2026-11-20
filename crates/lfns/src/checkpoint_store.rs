@@ -104,16 +104,16 @@ impl CheckpointStore {
         let batches: Vec<DeadBatchRecord> = Self::read_completed(&self.dead_batches, n_iterations)?;
         self.check_batches_are_consecutive(&batches)?;
         let reports: Vec<IterationReport> = Self::read_completed(&self.reports, n_iterations)?;
-        // A proposal may depend on the acceptance rate of the iteration
-        // before it, so the resumed run needs that of the last one recorded.
-        let latest_acceptance_rate = reports.last().map(IterationReport::acceptance_rate);
+        // A proposal may depend on the acceptance rates of the iterations
+        // before it, so the resumed run needs those of all recorded ones.
+        let acceptance_rates = reports.iter().map(IterationReport::acceptance_rate).collect();
         let dead: Vec<Particle> = batches.into_iter().flat_map(|batch| batch.particles).collect();
         RunState::restore(
             self.config.population(),
             live.particles,
             &dead,
             live.n_proposals,
-            latest_acceptance_rate,
+            acceptance_rates,
         )
     }
 

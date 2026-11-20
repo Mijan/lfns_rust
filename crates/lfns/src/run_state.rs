@@ -26,7 +26,7 @@ pub struct RunState {
     population: Population,
     n_dimensions: usize,
     n_proposals: u64,
-    latest_acceptance_rate: Option<f64>,
+    acceptance_rates: Vec<f64>,
     live: LiveSet,
     dead: Vec<Particle>,
     dead_log_volume_weights: Vec<f64>,
@@ -36,18 +36,18 @@ pub struct RunState {
 impl RunState {
     /// Starts a run from its initial population.
     pub(crate) fn begin(population: Population, initial: Collection) -> Result<Self, LfnsError> {
-        Self::restore(population, initial.particles, &[], initial.n_proposals, None)
+        Self::restore(population, initial.particles, &[], initial.n_proposals, Vec::new())
     }
 
     /// Rebuilds a state from stored particles by replaying the iterations.
-    /// `latest_acceptance_rate` is that of the last iteration replayed,
-    /// `None` if there is none.
+    /// `acceptance_rates` are those of the iterations replayed, oldest
+    /// first.
     pub(crate) fn restore(
         population: Population,
         live: Vec<Particle>,
         dead: &[Particle],
         n_proposals: u64,
-        latest_acceptance_rate: Option<f64>,
+        acceptance_rates: Vec<f64>,
     ) -> Result<Self, LfnsError> {
         let n_dimensions = live.first().map_or(0, |particle| particle.unit_coordinates().len());
         Self::check_dimensions(live.iter().chain(dead), n_dimensions)?;
@@ -64,7 +64,7 @@ impl RunState {
             population,
             n_dimensions,
             n_proposals,
-            latest_acceptance_rate,
+            acceptance_rates,
             live: LiveSet::from_particles(population, live)?,
             dead: Vec::with_capacity(dead.len()),
             dead_log_volume_weights: Vec::new(),
@@ -92,7 +92,14 @@ impl RunState {
     /// accepted; `None` before the first iteration.
     #[must_use]
     pub fn latest_acceptance_rate(&self) -> Option<f64> {
-        self.latest_acceptance_rate
+        self.acceptance_rates.last().copied()
+    }
+
+    /// Fraction of proposals accepted in each iteration so far, oldest
+    /// first.
+    #[must_use]
+    pub fn acceptance_rates(&self) -> &[f64] {
+        &self.acceptance_rates
     }
 
     /// Number of parameters of each particle.
@@ -191,7 +198,7 @@ impl RunState {
             (collection.n_proposals, collection.n_failures),
             self.estimate_evidence(),
         );
-        self.latest_acceptance_rate = Some(report.acceptance_rate());
+        self.acceptance_rates.push(report.acceptance_rate());
         report
     }
 
